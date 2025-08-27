@@ -1,0 +1,6 @@
+# Requires Python >=3.7
+requests>=2.31.0,<3.0
+
+# Optional development dependencies
+# mypy>=1.8.0
+# types-requests>=2.31.0.10
