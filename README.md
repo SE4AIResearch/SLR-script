@@ -1,5 +1,4 @@
 # SLR-script
-# Scholarly Paper Retriever
 
 A unified Python script to search for academic papers across multiple digital libraries and APIs (OpenAlex, Crossref, arXiv, Springer, IEEE Xplore).  
 It retrieves metadata (title, authors, year, venue, DOI, URL, source) and exports them to CSV.
@@ -14,7 +13,7 @@ It retrieves metadata (title, authors, year, venue, DOI, URL, source) and export
 ---
 
 ## Requirements
-- **Python 3.7+** (tested with Python 3.9, 3.11)
+- **Python 3.7+**
 - Dependencies:
   ```bash
   pip install -r requirements.txt
