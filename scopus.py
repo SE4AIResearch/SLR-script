@@ -10,7 +10,7 @@ import os
 from requests import PreparedRequest
 
 # Scopus API key
-API_KEY = 'a17167505f5d6799ad4cf9c9f28de7f1'
+API_KEY = ''
 
 # Base URL for Scopus API
 base_url = "https://api.elsevier.com/content/search/scopus"
