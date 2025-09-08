@@ -687,6 +687,9 @@ class Paper:
     source: str
     score: float = 0.0  # ranking score (computed later)
     id_hint: Optional[str] = None
+    venue_type: Optional[str] = None
+    publisher: Optional[str] = None
+    event: Optional[str] = None
 
     def dedupe_key(self) -> str:
         if self.doi:
@@ -762,12 +765,14 @@ class OpenAlexProvider(Provider):
                         url_best = f"https://doi.org/{doi}"
                     authors = [a.get("author", {}).get("display_name") for a in w.get("authorships", []) if a.get("author")]
                     publisher = _norm(w.get("host_venue", {}).get("publisher")) if w.get("host_venue") else None
+                    venue_type = _norm(w.get("type")) if w.get("type") else None
                     specific = _detect_source(doi, venue, publisher)
                     src_name = self.name if not specific else f"{self.name}:{specific}"
                     out.append(Paper(
                         title=title, authors=_uniq([_norm(a) for a in authors]),
                         year=year, venue=venue, doi=doi, url=url_best,
-                        source=src_name, id_hint=w.get("id")
+                        source=src_name, id_hint=w.get("id"),
+                        venue_type=venue_type, publisher=publisher
                     ))
                 page += 1
         return out[:limit]
@@ -780,16 +785,20 @@ class CrossrefProvider(Provider):
         queries = self._prepare_query(query)
         url = "https://api.crossref.org/works"
         out: List[Paper] = []
-        rows = min(100, max(1, limit))
+        rows = min(1000, limit)
+
         for q_simple in queries:
             if len(out) >= limit:
                 break
-            offset = 0
+
+            # use cursor
+            cursor = "*"
+
             while len(out) < limit:
                 params = {
                     "query": q_simple,
                     "rows": min(rows, limit - len(out)),
-                    "offset": offset,
+                    "cursor": cursor,
                     "select": "DOI,title,author,issued,container-title,URL,type"
                 }
                 if year_from or year_to:
@@ -797,10 +806,13 @@ class CrossrefProvider(Provider):
                     if year_from: filt.append(f"from-pub-date:{year_from}-01-01")
                     if year_to:   filt.append(f"until-pub-date:{year_to}-12-31")
                     params["filter"] = ",".join(filt)
+
                 r = backoff_get(url, params=params)
-                items = r.json().get("message", {}).get("items", []) or []
+                msg = r.json().get("message", {})
+                items = msg.get("items", []) or []
                 if not items:
                     break
+
                 for it in items:
                     title = _norm(" ".join(it.get("title", []) or []))
                     date_parts = it.get("issued", {}).get("date-parts", [])
@@ -808,21 +820,31 @@ class CrossrefProvider(Provider):
                     doi = _clean_doi(it.get("DOI"))
                     venue = _norm(" ".join(it.get("container-title", []) or []))
                     url_best = it.get("URL") or (f"https://doi.org/{doi}" if doi else None)
+
                     authors = []
                     for a in it.get("author", []) or []:
                         name = " ".join([x for x in [a.get("given"), a.get("family")] if x])
                         if not name: name = a.get("name")
                         authors.append(_norm(name))
+
                     publisher = _norm(it.get("publisher")) if it.get("publisher") else None
+                    venue_type = _norm(it.get("type")) if it.get("type") else None
+                    event_name = _norm((it.get("event") or {}).get("name")) if it.get("event") else None
                     specific = _detect_source(doi, venue, publisher)
                     src_name = self.name if not specific else f"{self.name}:{specific}"
+
                     out.append(Paper(
                         title=title, authors=_uniq(authors), year=year, venue=venue,
-                        doi=doi, url=url_best, source=src_name
+                        doi=doi, url=url_best, source=src_name,
+                        venue_type=venue_type, publisher=publisher, event=event_name
                     ))
-                offset += len(items)
-        return out[:limit]
 
+                next_cursor = msg.get("next-cursor")
+                if not next_cursor:
+                    break
+                cursor = next_cursor
+
+        return out[:limit]
 
 class ArxivProvider(Provider):
     name = "arxiv"
@@ -879,7 +901,8 @@ class ArxivProvider(Provider):
                         doi = _doi_from_url(link)
                     out.append(Paper(
                         title=title, authors=_uniq(authors), year=year, venue="arXiv",
-                        doi=doi, url=link, source=self.name
+                        doi=doi, url=link, source=self.name,
+                        venue_type="preprint", publisher="arXiv"
                     ))
                     got += 1
                 if got == 0:
@@ -930,10 +953,13 @@ class SpringerProvider(Provider):
                 if (not doi) and url_best:
                     doi = _doi_from_url(url_best)
                 authors = _uniq([_norm(a.get("creator")) for a in rec.get("creators", []) if a.get("creator")])
+                publisher = _norm(rec.get("publisher")) if rec.get("publisher") else None
+                venue_type = _norm(rec.get("publicationType")) if rec.get("publicationType") else None
                 out.append(Paper(
                     title=title, authors=authors, year=year, venue=_norm(rec.get("publicationName")),
                     doi=doi, url=url_best or (f"https://doi.org/{doi}" if doi else None),
-                    source=self.name
+                    source=self.name,
+                    venue_type=venue_type, publisher=publisher
                 ))
             start += len(records)
         return out[:limit]
@@ -983,9 +1009,12 @@ class IeeeProvider(Provider):
                 for a in (it.get("authors", {}).get("authors", []) or []):
                     nm = a.get("full_name") or a.get("preferred_name")
                     if nm: authors.append(_norm(nm))
+                venue_type = _norm(it.get("content_type")) if it.get("content_type") else None
+                publisher = "IEEE"
                 out.append(Paper(
                     title=title, authors=_uniq(authors), year=year, venue=venue,
-                    doi=doi, url=url_best, source=self.name, id_hint=it.get("pdf_url")
+                    doi=doi, url=url_best, source=self.name, id_hint=it.get("pdf_url"),
+                    venue_type=venue_type, publisher=publisher
                 ))
             start_record += len(items)
         return out[:limit]
@@ -1062,6 +1091,9 @@ class ScopusProvider(Provider):
                     if nm:
                         authors.append(_norm(nm))
 
+                venue_type = _norm(e.get("prism:aggregationType")) if e.get("prism:aggregationType") else _norm(e.get("subtypeDescription")) if e.get("subtypeDescription") else None
+                publisher = _norm(e.get("dc:publisher")) if e.get("dc:publisher") else None
+
                 out.append(Paper(
                     title=title,
                     authors=_uniq(authors),
@@ -1069,7 +1101,9 @@ class ScopusProvider(Provider):
                     venue=venue,
                     doi=doi,
                     url=url_best,
-                    source=self.name
+                    source=self.name,
+                    venue_type=venue_type,
+                    publisher=publisher
                 ))
                 got += 1
 
@@ -1206,6 +1240,13 @@ def search_all(query: str,
             if base.source and p.source:
                 if ":" in p.source and ":" not in base.source:
                     base.source = p.source
+            # Merge new fields: venue_type, publisher, event
+            if not getattr(base, "venue_type", None) and getattr(p, "venue_type", None):
+                base.venue_type = p.venue_type
+            if not getattr(base, "publisher", None) and getattr(p, "publisher", None):
+                base.publisher = p.publisher
+            if not getattr(base, "event", None) and getattr(p, "event", None):
+                base.event = p.event
         else:
             by_key[key] = p
 
@@ -1227,7 +1268,7 @@ SUPPORTED_PROVIDERS: Dict[str, type] = {
 
 
 def save_jsonl(path: str, papers: List[Paper]) -> None:
-    wanted = ["title", "authors", "year", "venue", "doi", "url", "source"]
+    wanted = ["title", "authors", "year", "venue", "doi", "url", "venue_type", "publisher", "event", "source"]
     with open(path, "w", encoding="utf-8") as f:
         for p in papers:
             data = asdict(p)
@@ -1236,7 +1277,7 @@ def save_jsonl(path: str, papers: List[Paper]) -> None:
 
 
 def save_csv(path: str, papers: List[Paper]) -> None:
-    fields = ["title", "authors", "year", "venue", "doi", "url", "source", "specific_source"]
+    fields = ["title", "authors", "year", "venue", "doi", "url", "venue_type", "source", "specific_source"]
     with open(path, "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
@@ -1257,7 +1298,7 @@ def main():
     ap.add_argument("--year-from", type=int, default=None, help="lower bound year (inclusive)")
     ap.add_argument("--year-to", type=int, default=None, help="upper bound year (inclusive)")
     ap.add_argument("--limit", type=int, default=50, help="max total results")
-    ap.add_argument("--per-provider", type=int, default=100, help="max per provider")
+    ap.add_argument("--per-provider", type=int, default=1000, help="max per provider")
     ap.add_argument("--out-jsonl", default="results.jsonl", help="output JSONL path")
     ap.add_argument("--out-csv", default="results.csv", help="output CSV path")
     ap.add_argument("--list-sources", action="store_true",
