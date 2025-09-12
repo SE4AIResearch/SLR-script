@@ -498,7 +498,14 @@ def main():
     p.add_argument("--doi", help="DOI for sources that support fetching by DOI (e.g., openalex, crossref)")
     p.add_argument("--year-from", type=int, dest="year_from")
     p.add_argument("--year-to", type=int, dest="year_to")
-    p.add_argument("--limit", type=int, help="Target result size. With --merge, treated as target UNIQUE rows after de-dup; runner will refetch with higher per-source limits until reached or attempts exhausted.")
+    p.add_argument(
+        "--limit",
+        type=int,
+        help=(
+            "Optional. If omitted, the runner will not pass a per-source limit (each source will fetch all available results per its own pagination). "
+            "With --merge, when provided, this is treated as the target UNIQUE rows after de-dup; the runner will refetch with higher per-source limits until reached or attempts are exhausted."
+        ),
+    )
     p.add_argument("--per-page", type=int, dest="per_page")
     p.add_argument("--type", help="Content type filter for sources that support it")
     p.add_argument("--email", help="Email for Crossref polite pool")
@@ -533,6 +540,8 @@ def main():
 
     if not args.query and not args.doi:
         p.error("You must provide --query (or --doi for DOI-capable sources).")
+    if args.limit is None:
+        print("[INFO] No --limit provided: each source will attempt to fetch all available results (may take a long time).")
 
     formats = None
     if args.formats:
