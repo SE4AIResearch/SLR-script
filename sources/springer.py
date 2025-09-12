@@ -202,13 +202,50 @@ def extract_records(soup: BeautifulSoup):
             if m:
                 doi = m.group(0)
 
+            abstract_el = (li.find("div", class_=re.compile("abstract|summary|description", re.I)) or
+                           li.find("p", class_=re.compile("snippet|preview", re.I)))
+            abstract = abstract_el.get_text(strip=True) if abstract_el else ""
+
+            journal_el = (li.find("span", attrs={"data-test": "journal"}) or
+                          li.find("em", class_=re.compile("journal|publication", re.I)) or
+                          li.find("cite"))
+            journal = journal_el.get_text(strip=True) if journal_el else ""
+
+            volume_el = li.find("span", class_=re.compile("volume|issue|pages", re.I))
+            volume_info = volume_el.get_text(strip=True) if volume_el else ""
+
+            keywords_el = (li.find("div", class_=re.compile("keywords|tags|topics", re.I)) or
+                           li.find("span", class_=re.compile("keyword|subject", re.I)) or
+                           li.find("ul", class_=re.compile("keywords|tags", re.I)))
+            keywords = keywords_el.get_text(strip=True) if keywords_el else ""
+
+            lang_el = li.find("span", attrs={"data-test": "language"})
+            language = lang_el.get_text(strip=True) if lang_el else ""
+
+            oa_el = (li.find("span", class_=re.compile("open.access|oa", re.I)) or
+                     li.find("div", attrs={"data-test": "open-access"}))
+            open_access = bool(oa_el)
+
+            citation_el = li.find("span", class_=re.compile("citation|cited", re.I))
+            citations = citation_el.get_text(strip=True) if citation_el else ""
+
+            download_links = []
+            for a in li.find_all("a", href=True):
+                href = a.get("href", "")
+                if any(x in href.lower() for x in ["pdf", "download", "fulltext"]):
+                    download_links.append(href if href.startswith("http") else f"{BASE}{href}")
+
             yield {
                 "title": title,
-                "published": published,
-                "link": link,
-                "DOI": doi,
                 "authors": authors,
+                "published date": published,
+                "link": link,
                 "content_type": content_type,
+                "DOI": doi,
+                "abstract": abstract,
+                "venue": journal,
+                "keywords": keywords,
+                "citations": citations
             }
 
 
@@ -247,11 +284,12 @@ def main():
 
     with open(out_path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
-        w.writerow(['title', 'published', 'link', 'DOI', 'authors', 'content_type'])
+        w.writerow(['title', 'authors', 'published date', 'link', 'content_type', 'DOI', 'abstract', 'venue', 'keywords', 'citations'])
 
         # page 1
         for rec in first_records:
-            w.writerow([rec['title'], rec['published'], rec['link'], rec['DOI'], rec['authors'], rec['content_type']])
+            w.writerow([rec['title'], rec['authors'], rec['published date'], rec['link'], rec['content_type'],
+                        rec['DOI'], rec['abstract'], rec['venue'], rec['keywords'], rec['citations']])
 
         empty_count = 0
         prev_url = url1
@@ -267,7 +305,8 @@ def main():
             soup = BeautifulSoup(html, 'html.parser')
             got = 0
             for rec in extract_records(soup):
-                w.writerow([rec['title'], rec['published'], rec['link'], rec['DOI'], rec['authors'], rec['content_type']])
+                w.writerow([rec['title'], rec['authors'], rec['published date'], rec['link'], rec['content_type'],
+                            rec['DOI'], rec['abstract'], rec['venue'], rec['keywords'], rec['citations']])
                 got += 1
 
             # detect presence of a Next link in pagination (best-effort)

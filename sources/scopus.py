@@ -1,16 +1,14 @@
-import re
-import json
 import requests
 import pandas as pd
 from tqdm import tqdm
 import re
-from bs4 import BeautifulSoup
 import argparse
-import os
+import time
 from requests import PreparedRequest
+from abstract import fetch_abstract
 
 # Scopus API key
-API_KEY = ''
+API_KEY = 'a17167505f5d6799ad4cf9c9f28de7f1'
 
 # Base URL for Scopus API
 base_url = "https://api.elsevier.com/content/search/scopus"
@@ -26,16 +24,21 @@ params = {
     'query': '',
     'view': 'STANDARD',
     'start': 0,
-    'count': 25,  # Initial count to handle pagination
-    'field': 'dc:title,prism:doi,dc:creator,author,prism:coverDate,prism:url,link',
+    'count': 25,
+    'field': ('dc:title,prism:doi,dc:creator,author,prism:coverDate,prism:url,link,eid,'
+              'dc:description,prism:publicationName,prism:aggregationType,subtype,subtypeDescription,'
+              'citedby-count,prism:volume,prism:issueIdentifier,prism:pageRange,authkeywords'),
     'httpAccept': 'application/json',
 }
 
 parser = argparse.ArgumentParser(description="Search Scopus and export CSV (title, authors, year, doi, url)")
 parser.add_argument("query", help="Scopus search query string, e.g., TITLE-ABS-KEY((refactor*) AND (LLM))")
 parser.add_argument("--count", type=int, default=25, help="Items per page (1-200), default 25")
-parser.add_argument("--normalize-query", action="store_true", help="Normalize query: collapse whitespace/newlines and fix hyphen+newline issues")
+parser.add_argument("--normalize-query", action="store_true", help="Normalize query: collapse whitespace/newlines")
+parser.add_argument("--use-alt-abstracts", action="store_true", default=True,
+                    help="Use alternative sources for abstracts")
 args = parser.parse_args()
+
 
 def _normalize_query_string(q: str) -> str:
     if not q:
@@ -44,9 +47,9 @@ def _normalize_query_string(q: str) -> str:
     s = re.sub(r"[\-\u2010-\u2015]\s+(?=\w)", " ", s)
     return s
 
+
 # --- Scopus query normalization helpers ---
 _SCOPUS_FIELD_RE = re.compile(r"\b(TITLE-ABS-KEY|TITLE|ABS|KEY)\s*\(", re.IGNORECASE)
-
 _OPERATOR_SET = {"AND", "OR", "NOT"}
 
 
@@ -55,9 +58,7 @@ def _is_proximity(tok: str) -> bool:
 
 
 def _tokenize_boolean(expr: str):
-    """Tokenize a boolean expression into a list of tokens while respecting quotes and parentheses.
-    Returns a list of strings: operators (AND/OR/NOT), parens '(', ')', and raw tokens.
-    """
+    """Tokenize a boolean expression into a list of tokens while respecting quotes and parentheses."""
     tokens = []
     i, n = 0, len(expr)
     in_quote = False
@@ -94,7 +95,7 @@ def _tokenize_boolean(expr: str):
         if tok:
             tokens.append(tok)
 
-    # Merge case-insensitive operators appearing as standalone tokens
+    # Merge case-insensitive operators
     merged = []
     for tok in tokens:
         up = tok.upper()
@@ -110,11 +111,7 @@ def _is_operator(tok: str) -> bool:
 
 
 def _rebuild_with_generic_quotes(tokens):
-    """Rebuild tokens, quoting any multi-word term segments between operators/parentheses.
-    - Preserves already-quoted tokens
-    - Skips quoting segments that contain proximity operators like W/1
-    - Does not touch field functions (TITLE-ABS-KEY(...), etc.)
-    """
+    """Rebuild tokens, quoting multi-word terms between operators/parentheses."""
     out = []
     seg = []
 
@@ -124,26 +121,25 @@ def _rebuild_with_generic_quotes(tokens):
             return
         seg_text = ' '.join(seg).strip()
 
-        # If any token already quoted, or the combined segment looks like proximity, keep as-is
+        # If already quoted or proximity operator, keep as-is
         if any((t.startswith('"') and t.endswith('"')) for t in seg) or _is_proximity(seg_text):
             out.extend(seg)
             seg = []
             return
 
-        # If the segment contains a field function, keep as-is
+        # If contains field function, keep as-is
         if re.search(r"\b(TITLE-ABS-KEY|TITLE|ABS|KEY)\s*\(", seg_text, re.IGNORECASE):
             out.extend(seg)
             seg = []
             return
 
-        # Multi-token (contains whitespace when joined): quote as a phrase
+        # Multi-token: quote as phrase
         if any(ch.isspace() for ch in seg_text):
             out.append(f'"{seg_text}"')
             seg = []
             return
 
-        # Single-token segment: quote everything (including wildcard tokens and proximity operators),
-        # but skip quoting field functions.
+        # Single-token: quote it
         tok = seg[0]
         if re.search(r"\b(TITLE-ABS-KEY|TITLE|ABS|KEY)\s*\(", tok, re.IGNORECASE):
             out.append(tok)
@@ -170,22 +166,6 @@ def _auto_quote_phrases(s: str) -> str:
     return ' '.join(tokens)
 
 
-# Convert simple two-term adjacency with wildcard into Scopus proximity `W/1`
-_ADJ_WILDCARD_PATTERNS = [
-    (re.compile(r"\bmethod\s+extract\*", re.I), "method W/1 extract*"),
-    (re.compile(r"\bextract\s+method\b", re.I), '"extract method"'),
-    (re.compile(r"\bmethod\s+split\*", re.I), "method W/1 split*"),
-    (re.compile(r"\bfunction\s+extract\*", re.I), "function W/1 extract*"),
-    (re.compile(r"\bfunction\s+split\*", re.I), "function W/1 split*"),
-]
-
-
-def _apply_adj_wildcard_fixes(s: str) -> str:
-    for rx, repl in _ADJ_WILDCARD_PATTERNS:
-        s = rx.sub(repl, s)
-    return s
-
-
 def _has_scopus_field(q: str) -> bool:
     return bool(_SCOPUS_FIELD_RE.search(q or ""))
 
@@ -193,53 +173,59 @@ def _has_scopus_field(q: str) -> bool:
 def _normalize_scopus_query(q: str) -> str:
     if not q:
         return q
-    # 1) Normalize whitespace and hyphen+newline artifacts
-    s = q.replace("\r", "")
-    s = re.sub(r"-\s*\n\s*", "", s)  # join hyphenated line breaks
-    s = re.sub(r"\s+", " ", s).strip()
-    s = re.sub(r"[\u2010-\u2015]", "-", s)  # normalize unicode hyphens
 
-    # 2) Ensure field wrapper
+    # Normalize whitespace and hyphen-newline
+    s = q.replace("\r", "")
+    s = re.sub(r"-\s*\n\s*", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"[\u2010-\u2015]", "-", s)
+
+    # Ensure field wrapper
     if not _has_scopus_field(s):
         s = f"TITLE-ABS-KEY({s})"
 
-    # 3) Work on the inner content of TITLE-ABS-KEY(...)
+    # Process inner content
     m = re.search(r"\bTITLE-ABS-KEY\s*\((.*)\)\s*$", s, flags=re.I)
     if m:
         inner = m.group(1)
-        inner = _apply_adj_wildcard_fixes(inner)
         inner = _auto_quote_phrases(inner)
         s = f"TITLE-ABS-KEY({inner})"
     else:
-        # Fallback: still apply fixes on full string
-        s = _apply_adj_wildcard_fixes(s)
         s = _auto_quote_phrases(s)
 
     return s
 
 
 def _build_url(base: str, params: dict) -> str:
-    pr = PreparedRequest();
-    pr.prepare_url(base, params);
+    pr = PreparedRequest()
+    pr.prepare_url(base, params)
     return pr.url
 
 
-# Override params based on user input, normalize query for Scopus
-query = args.query
-if args.normalize_query:
-    query = _normalize_query_string(query)
-    print(f"[DEBUG] Normalized query: {query}")
-query = _normalize_scopus_query(query)
-print(f"[DEBUG] Final Scopus query: {query}")
-params['query'] = query
-# for test purpose
-# params['query'] = 'TITLE-ABS-KEY((("extract method" OR "extract-method" OR "method W/1 extract*" OR "method-extract*" OR "extract function" OR "extractfunction" OR "function W/1 extract*" OR "function-extract*" OR "split method" OR "split-method" OR "method W/1 split*" OR "methodsplit*" OR "split function" OR "split-function" OR "function W/1 split*" OR "function-split*" OR "separat* method" OR "separat*method" OR "method separat*" OR "method-separat*" OR "separat* function" OR "separate-function" OR "function separat*" OR "function-separat*") AND ("long method" OR "long function" OR "large method" OR "large function" OR "duplicat* code" OR "code duplicat*" OR "code clone" OR "code bad smell" OR "code smell" OR "bad smell" OR "antipattern" OR "anti-patter" OR "design defect" OR "design flaw") AND ("refactor*") AND ("approach" OR "tool" OR "technique")))'
-params['count'] = max(1, min(200, args.count))
+def get_abstract_multi_source(entry, use_alt=True):
+    """Enhanced abstract fetching using universal fetcher"""
+    # First try Scopus's own abstract
+    abstract = entry.get('dc:description')
 
+    if (not abstract or abstract == 'N/A') and use_alt:
+        title = entry.get('dc:title', '')
+        doi = entry.get('prism:doi', '')
+
+        # Use universal fetcher
+        abstract = fetch_abstract(
+            title=title,
+            doi=doi,
+            verbose=False
+        )
+
+    return abstract if abstract else 'N/A'
+
+
+# ============= Main Functions =============
 
 def _extract_authors(entry):
     names = []
-    # Preferred rich list (STANDARD/COMPLETE may return this)
+    # Try structured author list
     for a in entry.get('author', []) or []:
         name = a.get('authname')
         if not name:
@@ -252,97 +238,172 @@ def _extract_authors(entry):
             name = a.get('ce:indexed-name') or a.get('$')
         if name:
             names.append(name)
-    # Fallback: dc:creator is a single string like "Alice; Bob; Carol"
+
+    # Fallback to dc:creator
     if not names and entry.get('dc:creator'):
         raw = entry.get('dc:creator') or ""
-        # split on ';' first, then commas as fallback
         parts = [p.strip() for p in re.split(r';|,', raw) if p.strip()]
         names.extend(parts)
+
     return names
 
 
-# Function to get metadata
 def get_metadata(base_url, params, headers):
     all_data = []
-    pbar = tqdm(desc="Fetching papers", unit="paper")
+    pbar = tqdm(desc="Fetching papers from Scopus", unit="paper")
+
     while True:
         debug_url = _build_url(base_url, params)
         print(f"[DEBUG] GET {debug_url}")
         response = requests.get(base_url, params=params, headers=headers)
         response.raise_for_status()
         data = response.json()
+
         if params.get('start', 0) == 0:
             total = data.get('search-results', {}).get('opensearch:totalResults')
             if total is not None:
-                print(f"[DEBUG] Scopus totalResults={total}")
+                print(f"[INFO] Total results found: {total}")
+
         entries = data['search-results']['entry']
         all_data.extend(entries)
         pbar.update(len(entries))
+
+        # Check for next page
         links = data.get('search-results', {}).get('link', []) or []
         if any((isinstance(link, dict) and link.get('@ref') == 'next') for link in links):
             params['start'] += params['count']
         else:
             break
+
     pbar.close()
     return all_data
 
 
-# Function to parse the metadata
 def parse_metadata(entries):
     papers_metadata = []
+
+    print("\n[INFO] Processing papers and fetching abstracts from alternative sources...")
+
     for entry in tqdm(entries, desc="Processing papers", unit="paper"):
-        title = entry.get('dc:title')
+        title = entry.get('dc:title', 'N/A')
         doi = entry.get('prism:doi', 'N/A')
-        # Choose the best URL: prefer DOI landing, then prism:url, then Scopus link
-        url_best = None
-        if doi and doi != 'N/A':
-            url_best = f"https://doi.org/{doi}"
-        if not url_best:
-            url_best = entry.get('prism:url')
-        if not url_best:
-            links = entry.get('link', []) or []
-            # Prefer the scopus landing link
-            for lk in links:
-                if lk.get('@ref') == 'scopus' and lk.get('@href'):
-                    url_best = lk.get('@href')
-                    break
-            if not url_best and links:
-                # Fallback to the first link href if available
-                for lk in links:
-                    if lk.get('@href'):
-                        url_best = lk.get('@href')
-                        break
+
+        # Skip if no DOI
         if doi == 'N/A':
             continue
+
+        # Get abstract from multiple sources
+        abstract = get_abstract_multi_source(entry, use_alt=args.use_alt_abstracts)
+        if abstract != 'N/A':
+            abstract = re.sub(r'\s+', ' ', abstract).strip()
+
+        venue = entry.get('prism:publicationName', 'N/A')
+
+        # Determine content type
+        agg_type = entry.get('prism:aggregationType', '')
+        subtype_desc = entry.get('subtypeDescription', '')
+        subtype_code = entry.get('subtype', '')
+
+        if subtype_desc:
+            content_type = subtype_desc
+        else:
+            content_type_map = {
+                'ar': 'Article',
+                'cp': 'Conference Paper',
+                're': 'Review',
+                'ch': 'Book Chapter',
+                'bk': 'Book',
+                'ed': 'Editorial',
+                'le': 'Letter',
+                'no': 'Note',
+                'sh': 'Short Survey',
+                'er': 'Erratum',
+                'ip': 'Article in Press',
+                'cr': 'Conference Review',
+                'ab': 'Abstract Report'
+            }
+            content_type = content_type_map.get(subtype_code, agg_type or 'N/A')
+
+        citations = entry.get('citedby-count', '0')
+        keywords = entry.get('authkeywords', 'N/A')
+
+        # Build URL
+        url_best = None
+        prism_url = entry.get('prism:url', '')
+        if prism_url and 'scopus_id/' in prism_url:
+            scopus_id = prism_url.split('scopus_id/')[-1]
+            url_best = f"https://www.scopus.com/record/display.uri?eid=2-s2.0-{scopus_id}&origin=resultslist"
+
+        if not url_best:
+            eid = entry.get('eid', '')
+            if eid:
+                url_best = f"https://www.scopus.com/record/display.uri?eid={eid}&origin=resultslist"
+
+        if not url_best and doi and doi != 'N/A':
+            url_best = f"https://doi.org/{doi}"
+
         authors = _extract_authors(entry)
         year = entry.get('prism:coverDate', '')[:4] if entry.get('prism:coverDate') else 'N/A'
+
         metadata = {
             'title': title,
             'authors': ", ".join(authors) if authors else 'N/A',
-            'year': year,
-            'doi': doi,
-            'url': url_best or 'N/A'
+            'published date': year,
+            'url': url_best or 'N/A',
+            'content_type': content_type,
+            'DOI': doi,
+            'abstract': abstract,
+            'venue': venue,
+            'keywords': keywords,
+            'citations': citations,
+            'abstract_source': 'Semantic Scholar/CrossRef' if abstract != 'N/A' else 'Not available'
         }
         papers_metadata.append(metadata)
+
     return papers_metadata
 
 
-# Function to calculate number of pages from page range
-def calculate_num_pages(page_range):
-    if page_range and '-' in page_range:
-        start, end = page_range.split('-')
-        return int(end) - int(start) + 1
-    return 4  # Default to 4 pages if page range is not available
+# ============= Main Execution =============
 
+# Process query
+query = args.query
+if args.normalize_query:
+    query = _normalize_query_string(query)
+    print(f"[DEBUG] Normalized query: {query}")
+
+query = _normalize_scopus_query(query)
+print(f"[DEBUG] Final Scopus query: {query}")
+params['query'] = query
+params['count'] = max(1, min(200, args.count))
 
 # Get metadata
+print("\n[INFO] Starting Scopus search...")
 entries = get_metadata(base_url, params, headers)
+
+print(f"\n[INFO] Found {len(entries)} papers in Scopus")
 papers_metadata = parse_metadata(entries)
 
-# Convert to DataFrame
+# Convert to DataFrame and save
 df = pd.DataFrame(papers_metadata)
 
-# Save to CSV
-df.to_csv('Scopus.csv', index=False)
+column_order = ['title', 'authors', 'published date', 'url', 'content_type', 'DOI',
+                'abstract', 'venue', 'keywords', 'citations', 'abstract_source']
 
-print(f"Metadata extraction complete. {len(papers_metadata)} papers extracted. Check the Scopus.csv file.")
+df = df[[col for col in column_order if col in df.columns]]
+
+# Save to CSV
+output_file = 'Scopus_with_abstracts.csv'
+df.to_csv(output_file, index=False)
+
+# Statistics
+total_papers = len(papers_metadata)
+papers_with_abstract = df[df['abstract'] != 'N/A'].shape[0]
+abstract_rate = (papers_with_abstract / total_papers * 100) if total_papers > 0 else 0
+
+print(f"\n{'=' * 60}")
+print(f"SUMMARY:")
+print(f"{'=' * 60}")
+print(f"Total papers extracted: {total_papers}")
+print(f"Papers with abstracts: {papers_with_abstract} ({abstract_rate:.1f}%)")
+print(f"Output saved to: {output_file}")
+print(f"{'=' * 60}")
