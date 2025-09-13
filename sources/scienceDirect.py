@@ -56,7 +56,7 @@ class ScienceDirectScraper:
             delay: Seconds to wait between requests
             enhance_abstracts: Whether to enrich abstracts using external sources (default: True)
         """
-        self.api_key = 'a17167505f5d6799ad4cf9c9f28de7f1'
+        self.api_key = api_key
         self.delay = delay
         self.session = requests.Session()
         self.session.headers.update({
@@ -639,7 +639,7 @@ Note: For better results, you can obtain a free Elsevier API key from:
     args = parser.parse_args()
 
     # Create scraper
-    scraper = ScienceDirectScraper(api_key=args.api_key, delay=args.delay,
+    scraper = ScienceDirectScraper(api_key='a17167505f5d6799ad4cf9c9f28de7f1', delay=args.delay,
                                    enhance_abstracts=(not args.no_enhance_abstracts))
 
     # Display search info
@@ -650,7 +650,7 @@ Note: For better results, you can obtain a free Elsevier API key from:
         print(f"Limit: {args.limit} papers")
     else:
         print("Fetching all available results...")
-    if args.api_key:
+    if args.api_key == 'a17167505f5d6799ad4cf9c9f28de7f1':
         print("Using Elsevier API key for enhanced access")
     else:
         print("No API key provided - using CrossRef API only")

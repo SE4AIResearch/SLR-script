@@ -34,11 +34,25 @@ params = {
 parser = argparse.ArgumentParser(description="Search Scopus and export CSV (title, authors, year, doi, url)")
 parser.add_argument("query", help="Scopus search query string, e.g., TITLE-ABS-KEY((refactor*) AND (LLM))")
 parser.add_argument("--count", type=int, default=25, help="Items per page (1-200), default 25")
+parser.add_argument("--limit", type=int, help="Optional max total items to fetch across pages. If omitted, fetch all available.")
+parser.add_argument("--output", help="Output CSV file path (default: Scopus_with_abstracts.csv)")
+parser.add_argument("--api-key", dest="api_key", help="Elsevier/Scopus API key. Overrides hardcoded key or ENV ELSEVIER_API_KEY")
 parser.add_argument("--normalize-query", action="store_true", help="Normalize query: collapse whitespace/newlines")
 parser.add_argument("--use-alt-abstracts", action="store_true", default=True,
                     help="Use alternative sources for abstracts")
 args = parser.parse_args()
 
+# Resolve API key precedence: CLI > ENV > hardcoded
+import os as _os
+_api_from_env = _os.getenv("ELSEVIER_API_KEY")
+if args.api_key:
+    API_KEY = args.api_key
+elif _api_from_env:
+    API_KEY = _api_from_env
+# Ensure headers use the final API_KEY
+headers['X-ELS-APIKey'] = API_KEY
+
+print(f"[INFO] Using Scopus API key: {'provided via --api-key' if args.api_key else ('from ENV' if _api_from_env else 'hardcoded')}\n")
 
 def _normalize_query_string(q: str) -> str:
     if not q:
@@ -248,9 +262,11 @@ def _extract_authors(entry):
     return names
 
 
-def get_metadata(base_url, params, headers):
+def get_metadata(base_url, params, headers, total_limit=None):
     all_data = []
     pbar = tqdm(desc="Fetching papers from Scopus", unit="paper")
+    fetched = 0
+    per_page = max(1, min(200, params.get('count', 25)))
 
     while True:
         debug_url = _build_url(base_url, params)
@@ -266,14 +282,25 @@ def get_metadata(base_url, params, headers):
 
         entries = data['search-results']['entry']
         all_data.extend(entries)
+        fetched += len(entries)
         pbar.update(len(entries))
 
-        # Check for next page
-        links = data.get('search-results', {}).get('link', []) or []
-        if any((isinstance(link, dict) and link.get('@ref') == 'next') for link in links):
-            params['start'] += params['count']
-        else:
+        # Respect total_limit if provided
+        if total_limit is not None and fetched >= total_limit:
             break
+
+        links = data.get('search-results', {}).get('link', []) or []
+        has_next = any((isinstance(link, dict) and link.get('@ref') == 'next') for link in links)
+        if not has_next:
+            break
+        # If we have a limit, compute remaining and adjust page size
+        if total_limit is not None:
+            remaining = max(0, total_limit - fetched)
+            if remaining <= 0:
+                break
+            params['count'] = max(1, min(200, remaining))
+        # Advance start
+        params['start'] += params['count']
 
     pbar.close()
     return all_data
@@ -378,7 +405,7 @@ params['count'] = max(1, min(200, args.count))
 
 # Get metadata
 print("\n[INFO] Starting Scopus search...")
-entries = get_metadata(base_url, params, headers)
+entries = get_metadata(base_url, params, headers, total_limit=args.limit)
 
 print(f"\n[INFO] Found {len(entries)} papers in Scopus")
 papers_metadata = parse_metadata(entries)
@@ -392,7 +419,7 @@ column_order = ['title', 'authors', 'published date', 'url', 'content_type', 'DO
 df = df[[col for col in column_order if col in df.columns]]
 
 # Save to CSV
-output_file = 'Scopus_with_abstracts.csv'
+output_file = args.output or 'Scopus_with_abstracts.csv'
 df.to_csv(output_file, index=False)
 
 # Statistics

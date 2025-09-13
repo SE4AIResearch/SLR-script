@@ -10,13 +10,6 @@
 
 ## Usage
 
-### Quick Start Example
-Run a simple query to search for papers related to "extract method refactoring" and save the top 100 results to a CSV file:
-
-```bash
-python retrieve.py "extract method refactoring" --limit 100 --out-csv results.csv
-```
-
 ### Command-line Options
 - `query` (positional): Your search string, e.g., `"machine learning"`  
 - `--year-from`: Lower bound year (inclusive) to filter results  
@@ -35,20 +28,15 @@ python retrieve.py "extract method refactoring" --limit 100 --out-csv results.cs
 
 - Search for papers on "machine learning" published between 2018 and 2022, limiting to 50 results:
   ```bash
-  python retrieve.py "machine learning" --year-from 2018 --year-to 2022 --limit 50
+  python run_all.py --query "machine learning" --year-from 2018 --year-to 2022 --limit 50
   ```
 
 - Search across OpenAlex, Crossref, and arXiv for "deep learning" with up to 200 results per provider:
   ```bash
-  python retrieve.py "deep learning" --sources openalex,crossref,arxiv --per-provider 200
-  ```
-
-- Query Springer and IEEE Xplore with API keys and save results to SQLite:
-  ```bash
-  python retrieve.py "natural language processing" --sources springer,ieee --springer-api-key YOUR_SPRINGER_KEY --ieee-api-key YOUR_IEEE_KEY --out-sqlite results.db
+  python run_all.py --query "deep learning" --sources openalex,crossref,arxiv --per-provider 200
   ```
 
 - Merge results from multiple CSV files into one consolidated CSV:
   ```bash
-  python retrieve.py --merge file1.csv file2.csv --out-csv merged_results.csv
+  python run_all.py --merge file1.csv file2.csv --out-csv merged_results.csv
   ```

@@ -167,11 +167,17 @@ class OpenAlexSpec(SourceSpec):
 class ACMSpec(SourceSpec):
     def build(self, args, out_dir):
         out_prefix = out_dir / "acm"
-        argv = [sys.executable, str(self.script), "search", args.query]
+        argv = [sys.executable, str(self.script)]
+        # Parent-level options must appear before the subcommand in argparse
+        if args.limit is not None:     argv += ["--limit", str(args.limit)]
+        if args.email:                 argv += ["--email", args.email]
+        if args.format:                argv += ["--format", args.format]
+        argv += ["--output", str(out_prefix)]
+        # Subcommand and its own options
+        argv += ["search", args.query]
         if args.year_from is not None: argv += ["--year-from", str(args.year_from)]
         if args.year_to   is not None: argv += ["--year-to",   str(args.year_to)]
         if args.type:                  argv += ["--type", args.type]
-        argv += ["--output", str(out_prefix)]
         return argv, str(out_prefix)
 
 class ArxivSpec(SourceSpec):
@@ -235,14 +241,14 @@ class WileySpec(SourceSpec):
 
 # Registry
 SOURCES: Dict[str, SourceSpec] = {
-    "crossref":      CrossrefSpec("crossref", THIS_DIR/"source"/"crossref.py"),
-    "openalex":      OpenAlexSpec("openalex", THIS_DIR/"source"/"openalex.py"),
-    "acm":           ACMSpec("acm", THIS_DIR/"source"/"acm.py"),
-    "arxiv":         ArxivSpec("arxiv", THIS_DIR/"source"/"arxiv.py"),
-    "sciencedirect": ScienceDirectSpec("sciencedirect", THIS_DIR/"source"/"scienceDirect.py"),
-    "scopus":        ScopusSpec("scopus", THIS_DIR/"source"/"scopus.py"),
-    "springer":      SpringerSpec("springer", THIS_DIR/"source"/"springer.py"),
-    "wiley":         WileySpec("wiley", THIS_DIR/"source"/"wiley.py"),
+    "crossref":      CrossrefSpec("crossref", THIS_DIR/"sources"/"crossref.py"),
+    "openalex":      OpenAlexSpec("openalex", THIS_DIR/"sources"/"openalex.py"),
+    "acm":           ACMSpec("acm", THIS_DIR/"sources"/"acm.py"),
+    "arxiv":         ArxivSpec("arxiv", THIS_DIR/"sources"/"arxiv.py"),
+    "sciencedirect": ScienceDirectSpec("sciencedirect", THIS_DIR/"sources"/"scienceDirect.py"),
+    "scopus":        ScopusSpec("scopus", THIS_DIR/"sources"/"scopus.py"),
+    "springer":      SpringerSpec("springer", THIS_DIR/"sources"/"springer.py"),
+    "wiley":         WileySpec("wiley", THIS_DIR/"sources"/"wiley.py"),
 }
 
 def parse_sources(s: str) -> List[str]:
@@ -339,7 +345,9 @@ def _dedup_merge_records(existing: dict, new: dict) -> dict:
     return existing
 
 def load_and_dedup_csvs(csv_map: Dict[str, Path]) -> List[dict]:
-    """Load multiple CSVs, de-duplicate by DOI or (title,year) with abstract preference."""
+    """Load multiple CSVs, de-duplicate by DOI or (title,year) with abstract preference.
+    Also annotate each record with a 'source' field derived from the CSV origin (if not already present).
+    """
     import csv
     uniq: OrderedDict[str, dict] = OrderedDict()
     for src, path in csv_map.items():
@@ -348,6 +356,9 @@ def load_and_dedup_csvs(csv_map: Dict[str, Path]) -> List[dict]:
         with open(path, 'r', encoding='utf-8', newline='') as f:
             r = csv.DictReader(f)
             for rec in r:
+                # Ensure source annotation if missing
+                if not (rec.get('source') or rec.get('Source')):
+                    rec['source'] = src
                 key = _dedup_key(rec)
                 if key in uniq:
                     chosen = _dedup_merge_records(uniq[key], rec)
@@ -493,7 +504,8 @@ def normalize_and_merge(
 
 def main():
     p = argparse.ArgumentParser(description="Unified runner for your academic crawlers")
-    p.add_argument("--sources", required=True, help="Comma-separated sources or 'all'")
+    p.add_argument("--sources", help="Comma-separated sources or 'all'")
+    p.add_argument("--source", help="Alias of --sources (singular); can be combined with --sources")
     p.add_argument("--query", help="Search query (ignored if --doi is set and a source supports DOI)")
     p.add_argument("--doi", help="DOI for sources that support fetching by DOI (e.g., openalex, crossref)")
     p.add_argument("--year-from", type=int, dest="year_from")
@@ -538,8 +550,18 @@ def main():
 
     args = p.parse_args()
 
+    # Validate query/doi
     if not args.query and not args.doi:
         p.error("You must provide --query (or --doi for DOI-capable sources).")
+
+    # Allow using --source as an alias to --sources
+    if not args.sources and not args.source:
+        p.error("You must provide --sources or --source (e.g., --sources acm,arxiv or --source acm,arxiv).")
+    if args.sources and args.source:
+        args.sources = f"{args.sources},{args.source}"
+    elif not args.sources:
+        args.sources = args.source
+
     if args.limit is None:
         print("[INFO] No --limit provided: each source will attempt to fetch all available results (may take a long time).")
 
