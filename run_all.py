@@ -184,7 +184,11 @@ class ArxivSpec(SourceSpec):
     def build(self, args, out_dir):
         out_prefix = out_dir / "arxiv"
         argv = [sys.executable, str(self.script), args.query]
-        if args.max_results is not None: argv += ["--max-results", str(args.max_results)]
+        # Prefer explicit --max-results; otherwise map runner --limit to arxiv --max-results
+        if args.max_results is not None:
+            argv += ["--max-results", str(args.max_results)]
+        elif args.limit is not None:
+            argv += ["--max-results", str(args.limit)]
         if args.sort_by:                 argv += ["--sort-by", args.sort_by]
         if args.sort_order:              argv += ["--sort-order", args.sort_order]
         if args.start is not None:       argv += ["--start", str(args.start)]
@@ -268,21 +272,23 @@ def run_cmd(argv: List[str]) -> int:
         print(f"[ERROR] Command not found: {argv[0]}")
         return 127
 
-def discover_latest_csvs(out_dir: Path) -> Dict[str, Path]:
-    """Find per-source CSVs saved by scripts (best-effort)."""
+def discover_latest_csvs(out_dir: Path, allowed_sources: Optional[List[str]] = None) -> Dict[str, Path]:
+    """Find per-source CSVs saved by scripts (best-effort). If allowed_sources is provided, restrict to those."""
     found: Dict[str, Path] = {}
-    # Typical file names we set via --output
-    for key in ["crossref", "openalex", "acm", "arxiv", "sciencedirect", "scopus", "wiley"]:
+    preferred = ["crossref", "openalex", "acm", "arxiv", "sciencedirect", "scopus", "wiley", "springer"]
+    for key in preferred:
+        if allowed_sources is not None and key not in allowed_sources:
+            continue
+        if key == "springer":
+            springer_dir = THIS_DIR / "springer_results"
+            if springer_dir.exists():
+                candidates = sorted(springer_dir.glob("springer_*.csv"))
+                if candidates:
+                    found["springer"] = candidates[-1]
+            continue
         p = out_dir / f"{key}.csv"
         if p.exists():
             found[key] = p
-    # OpenAlex may have JSONL only, but we also told it to write CSV
-    # Springer writes timestamped CSV somewhere inside its own output dir; scan recursively
-    springer_dir = THIS_DIR / "springer_results"
-    if springer_dir.exists():
-        candidates = sorted(springer_dir.glob("springer_*.csv"))
-        if candidates:
-            found["springer"] = candidates[-1]
     return found
 
 # ---- Helper: De-duplication and CSV loading ----
@@ -324,12 +330,13 @@ def _dedup_key(rec: dict) -> str:
     # last resort: hash of full record
     return f"hash::{hash(str(sorted(rec.items())))}"
 
-def _dedup_merge_records(existing: dict, new: dict) -> dict:
+def _dedup_merge_records(existing: dict, new: dict, priority_rank: Optional[Dict[str, int]] = None) -> dict:
     """Return the preferred record between two duplicates.
     Preference order:
       1) With abstract over without
       2) Longer abstract length
-      3) Otherwise keep existing (stable)
+      3) Tie-break by source priority if provided
+      4) Otherwise keep existing (stable)
     """
     has_abs_a = _rec_has_abstract(existing)
     has_abs_b = _rec_has_abstract(new)
@@ -342,9 +349,17 @@ def _dedup_merge_records(existing: dict, new: dict) -> dict:
         lb = len(str(new.get('abstract') or new.get('Abstract') or ''))
         if lb > la:
             return new
+    # Tie-break by source priority if provided
+    if priority_rank is not None:
+        sa = (existing.get('source') or existing.get('Source') or '').strip().lower()
+        sb = (new.get('source') or new.get('Source') or '').strip().lower()
+        ra = priority_rank.get(sa, 1_000_000)
+        rb = priority_rank.get(sb, 1_000_000)
+        if rb < ra:
+            return new
     return existing
 
-def load_and_dedup_csvs(csv_map: Dict[str, Path]) -> List[dict]:
+def load_and_dedup_csvs(csv_map: Dict[str, Path], priority_rank: Optional[Dict[str, int]] = None) -> List[dict]:
     """Load multiple CSVs, de-duplicate by DOI or (title,year) with abstract preference.
     Also annotate each record with a 'source' field derived from the CSV origin (if not already present).
     """
@@ -361,7 +376,7 @@ def load_and_dedup_csvs(csv_map: Dict[str, Path]) -> List[dict]:
                     rec['source'] = src
                 key = _dedup_key(rec)
                 if key in uniq:
-                    chosen = _dedup_merge_records(uniq[key], rec)
+                    chosen = _dedup_merge_records(uniq[key], rec, priority_rank=priority_rank)
                     uniq[key] = chosen
                 else:
                     uniq[key] = rec
@@ -430,6 +445,7 @@ def normalize_and_merge(
     target_limit: Optional[int] = None,
     sql_db_path: Optional[Path] = None,
     sql_table: str = "papers",
+    priority_rank: Optional[Dict[str, int]] = None,
 ) -> int:
     """
     Normalize different CSV schemas into a unified set of columns and merge.
@@ -443,7 +459,7 @@ def normalize_and_merge(
     ]
 
     # Load & dedup first
-    deduped_records = load_and_dedup_csvs(csv_map)
+    deduped_records = load_and_dedup_csvs(csv_map, priority_rank=priority_rank)
 
     # Optionally trim to target_limit while preserving order
     if target_limit is not None and target_limit > 0:
@@ -515,9 +531,12 @@ def main():
         type=int,
         help=(
             "Optional. If omitted, the runner will not pass a per-source limit (each source will fetch all available results per its own pagination). "
-            "With --merge, when provided, this is treated as the target UNIQUE rows after de-dup; the runner will refetch with higher per-source limits until reached or attempts are exhausted."
+            "With --merge, when provided, this is treated as the target UNIQUE rows after de-dup; the runner will refetch with higher per-source limits until reached or attempts are exhausted. "
+            "For arXiv, this is forwarded as --max-results."
         ),
     )
+    p.add_argument("--fresh", action="store_true", help="Before running, delete any existing per-source outputs in --out-dir for the chosen sources to avoid merging stale files.")
+    p.add_argument("--source-priority", help="Comma-separated source priority for dedup tie-breaks (default: chosen order). Example: sciencedirect,openalex,crossref")
     p.add_argument("--per-page", type=int, dest="per_page")
     p.add_argument("--type", help="Content type filter for sources that support it")
     p.add_argument("--email", help="Email for Crossref polite pool")
@@ -600,6 +619,22 @@ def main():
         print(f"[WARN] Unknown sources: {unknown}. Known: {list(SOURCES.keys())}", file=sys.stderr)
         chosen = [c for c in chosen if c in SOURCES]
 
+    # Build source priority for dedup (ties)
+    priority_list = [s.strip().lower() for s in (args.source_priority.split(',') if args.source_priority else chosen)]
+    priority_rank = {name: idx for idx, name in enumerate(priority_list)}
+
+    # Optionally remove stale outputs for chosen sources
+    if args.fresh:
+        for key in chosen:
+            for ext in (".csv", ".json", ".jsonl"):
+                fp = out_dir / f"{key}{ext}"
+                if fp.exists():
+                    try:
+                        fp.unlink()
+                        print(f"[INFO] Removed stale file: {fp}")
+                    except Exception as e:
+                        print(f"[WARN] Failed to remove {fp}: {e}")
+
     results: Dict[str, str] = {}
     for key in chosen:
         spec = SOURCES[key]
@@ -618,19 +653,19 @@ def main():
         target_unique = args.limit if args.limit else None
 
         while True:
-            csv_map = discover_latest_csvs(out_dir)
+            csv_map = discover_latest_csvs(out_dir, allowed_sources=chosen)
             if not csv_map:
                 print("[WARN] No per-source CSVs found to merge. Skipping merging.", file=sys.stderr)
                 break
             merged_path = out_dir / "merged_all_sources.csv"
             # Do not trim to target here; we want to see how many we have
-            unique_count = normalize_and_merge(csv_map, merged_path, target_limit=None, sql_db_path=sql_db_path, sql_table=args.sql_table)
+            unique_count = normalize_and_merge(csv_map, merged_path, target_limit=None, sql_db_path=sql_db_path, sql_table=args.sql_table, priority_rank=priority_rank)
             print(f"[OK] Merged (deduped) rows: {unique_count}. Written to: {merged_path}")
 
             if not target_unique or unique_count >= target_unique or attempt >= max_attempts:
                 # If target provided and we have more than needed, trim to target
                 if target_unique and unique_count > target_unique:
-                    _ = normalize_and_merge(csv_map, merged_path, target_limit=target_unique, sql_db_path=sql_db_path, sql_table=args.sql_table)
+                    _ = normalize_and_merge(csv_map, merged_path, target_limit=target_unique, sql_db_path=sql_db_path, sql_table=args.sql_table, priority_rank=priority_rank)
                     print(f"[OK] Trimmed merged CSV to target {target_unique} rows.")
                 break
 
@@ -653,8 +688,8 @@ def main():
 
         # After loop, ensure final file is trimmed to target if needed
         if target_unique:
-            csv_map = discover_latest_csvs(out_dir)
-            _ = normalize_and_merge(csv_map, merged_path, target_limit=target_unique, sql_db_path=sql_db_path, sql_table=args.sql_table)
+            csv_map = discover_latest_csvs(out_dir, allowed_sources=chosen)
+            _ = normalize_and_merge(csv_map, merged_path, target_limit=target_unique, sql_db_path=sql_db_path, sql_table=args.sql_table, priority_rank=priority_rank)
 
     # Save a small run manifest for traceability
     manifest = {
