@@ -280,11 +280,19 @@ def discover_latest_csvs(out_dir: Path, allowed_sources: Optional[List[str]] = N
         if allowed_sources is not None and key not in allowed_sources:
             continue
         if key == "springer":
+            # Prefer legacy springer_results dir if present
             springer_dir = THIS_DIR / "springer_results"
+            candidates = []
             if springer_dir.exists():
                 candidates = sorted(springer_dir.glob("springer_*.csv"))
-                if candidates:
-                    found["springer"] = candidates[-1]
+            # Also check current out_dir for timestamped files (some scripts now write here)
+            more = sorted(out_dir.glob("springer_*.csv"))
+            candidates = sorted(candidates + more)
+            # And check for a plain springer.csv in out_dir
+            if (out_dir / "springer.csv").exists():
+                candidates.append(out_dir / "springer.csv")
+            if candidates:
+                found["springer"] = candidates[-1]
             continue
         p = out_dir / f"{key}.csv"
         if p.exists():
@@ -647,6 +655,7 @@ def main():
 
     # Merge CSVs if requested (with de-dup) and optionally re-crawl until target unique count >= args.limit
     if args.merge:
+        merged_path = out_dir / "merged_all_sources.csv"
         attempt = 0
         max_attempts = 3  # you can tweak this if needed
         growth = 1.5      # per attempt, increase per-source limit by 50%
@@ -656,8 +665,9 @@ def main():
             csv_map = discover_latest_csvs(out_dir, allowed_sources=chosen)
             if not csv_map:
                 print("[WARN] No per-source CSVs found to merge. Skipping merging.", file=sys.stderr)
+                # If nothing to merge, avoid referencing merged_path later
+                target_unique = None
                 break
-            merged_path = out_dir / "merged_all_sources.csv"
             # Do not trim to target here; we want to see how many we have
             unique_count = normalize_and_merge(csv_map, merged_path, target_limit=None, sql_db_path=sql_db_path, sql_table=args.sql_table, priority_rank=priority_rank)
             print(f"[OK] Merged (deduped) rows: {unique_count}. Written to: {merged_path}")
@@ -689,7 +699,10 @@ def main():
         # After loop, ensure final file is trimmed to target if needed
         if target_unique:
             csv_map = discover_latest_csvs(out_dir, allowed_sources=chosen)
-            _ = normalize_and_merge(csv_map, merged_path, target_limit=target_unique, sql_db_path=sql_db_path, sql_table=args.sql_table, priority_rank=priority_rank)
+            if csv_map:
+                _ = normalize_and_merge(csv_map, merged_path, target_limit=target_unique, sql_db_path=sql_db_path, sql_table=args.sql_table, priority_rank=priority_rank)
+            else:
+                print("[WARN] No per-source CSVs found to finalize trim; skipping final trim.", file=sys.stderr)
 
     # Save a small run manifest for traceability
     manifest = {
