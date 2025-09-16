@@ -289,18 +289,30 @@ def get_metadata(base_url, params, headers, total_limit=None):
         if total_limit is not None and fetched >= total_limit:
             break
 
+        # Check if Scopus reports a 'next' link
         links = data.get('search-results', {}).get('link', []) or []
         has_next = any((isinstance(link, dict) and link.get('@ref') == 'next') for link in links)
         if not has_next:
             break
-        # If we have a limit, compute remaining and adjust page size
+
+        # Compute remaining and decide next page size (never exceed initial per_page)
+        remaining = None
         if total_limit is not None:
             remaining = max(0, total_limit - fetched)
             if remaining <= 0:
                 break
-            params['count'] = max(1, min(200, remaining))
-        # Advance start
-        params['start'] += params['count']
+            next_count = max(1, min(per_page, remaining))
+        else:
+            next_count = per_page
+
+        # Advance start by the *previous* page size or actual returned rows to avoid big jumps
+        prev_count = params.get('count', per_page)
+        # Be defensive: if API returned fewer entries than requested, advance by that number
+        advance_by = len(entries) if len(entries) < prev_count else prev_count
+        params['start'] += advance_by
+
+        # Set the next page size
+        params['count'] = next_count
 
     pbar.close()
     return all_data
