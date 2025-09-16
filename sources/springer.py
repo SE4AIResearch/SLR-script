@@ -139,8 +139,37 @@ def detect_total_pages(soup: BeautifulSoup, first_page_count: int, default_per_p
     return max(pages_by_nav, pages_by_count, 1)
 
 
+def extract_venue_from_text(text: str) -> str:
+    if not text:
+        return ""
+    
+    text = re.sub(r'\s+', ' ', text.strip())
+    
+    journal_patterns = [
+        r'In:\s*(.+?)(?:\s*,\s*\d{4}|$)',
+        r'^(.+?),\s*(?:vol\.|volume|pp\.|pages|\d{4})',
+        r'<i>(.+?)</i>',
+        r'<em>(.+?)</em>',
+        r'(.*?(?:Journal|Proceedings|Conference|Symposium|Workshop|Transactions|Letters|Review|Magazine|Bulletin)[^,]*)',
+        r'(IEEE\s+[^,]+|ACM\s+[^,]+)',
+    ]
+    
+    for pattern in journal_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            venue = match.group(1).strip()
+            venue = re.sub(r'^(In:|From:)\s*', '', venue, flags=re.IGNORECASE)
+            venue = re.sub(r'\s*\([^)]*\)$', '', venue)
+            if len(venue) > 5:
+                return venue
+    
+    return text if len(text) < 100 else ""
+
+
 def extract_records(soup: BeautifulSoup):
     """Yield records from a search result page."""
+    DEBUG = False
+    
     # Try modern list containers first
     containers = []
     lists = soup.find_all("ol", class_=re.compile("u-list-reset|results-list|content-item-list"))
@@ -155,13 +184,20 @@ def extract_records(soup: BeautifulSoup):
         # As a fallback, scan the whole document for cards/entries
         containers = [soup]
 
+    record_count = 0
     for cont in containers:
         items = cont.find_all(["li", "article", "div"], attrs={"data-test": re.compile("result|card", re.I)})
         if not items:
             # Common fallback card/list containers
             items = (cont.find_all("li") or cont.find_all("article") or
                      cont.find_all("div", class_=re.compile("c-card|result|content-item|app-card", re.I)))
+        
         for li in items:
+            record_count += 1
+            if DEBUG and record_count <= 3:  # 只调试前3条记录
+                print(f"\n[DEBUG] Processing record {record_count}")
+                print(f"[DEBUG] Item HTML snippet: {str(li)[:500]}...")
+            
             # Content type (best-effort)
             meta_div = li.find("div", class_=re.compile("c-meta|content-type", re.I)) or li
             ct = (meta_div.find(["span", "div"], attrs={"data-test": "content-type"}) if meta_div else None)
@@ -206,10 +242,39 @@ def extract_records(soup: BeautifulSoup):
                            li.find("p", class_=re.compile("snippet|preview", re.I)))
             abstract = abstract_el.get_text(strip=True) if abstract_el else ""
 
-            journal_el = (li.find("span", attrs={"data-test": "journal"}) or
-                          li.find("em", class_=re.compile("journal|publication", re.I)) or
-                          li.find("cite"))
-            journal = journal_el.get_text(strip=True) if journal_el else ""
+            journal = ""
+            
+            journal_link = li.find("a", attrs={"data-test": "parent"})
+            if journal_link:
+                journal = journal_link.get_text(strip=True)
+                if DEBUG and record_count <= 3:
+                    print(f"[DEBUG] Found journal via data-test='parent': '{journal}'")
+            
+            if not journal:
+                authors_div = li.find("div", class_=re.compile("authors", re.I))
+                if authors_div:
+                    text_content = authors_div.get_text(" ", strip=True)
+                    in_match = re.search(r'\bin\s+(.+?)(?:\s|$)', text_content)
+                    if in_match:
+                        potential_journal = in_match.group(1).strip()
+                        potential_journal = re.sub(r'\s*\d{2}\s+\w+\s+\d{4}.*', '', potential_journal)
+                        if len(potential_journal) > 2:
+                            journal = potential_journal
+                            if DEBUG and record_count <= 3:
+                                print(f"[DEBUG] Found journal via 'in' pattern: '{journal}'")
+            
+            if not journal:
+                potential_links = li.find_all("a", href=re.compile(r'/journal/\d+'))
+                for link in potential_links:
+                    link_text = link.get_text(strip=True)
+                    if link_text and len(link_text) > 2:
+                        journal = link_text
+                        if DEBUG and record_count <= 3:
+                            print(f"[DEBUG] Found journal via journal link: '{journal}'")
+                        break
+            
+            if DEBUG and record_count <= 3:
+                print(f"[DEBUG] Final journal: '{journal}'")
 
             volume_el = li.find("span", class_=re.compile("volume|issue|pages", re.I))
             volume_info = volume_el.get_text(strip=True) if volume_el else ""
