@@ -99,6 +99,7 @@ def preprocess_user_query(q: str) -> dict:
             normalized = "(" + " OR ".join(abstract_terms) + ")"
 
     result = {
+        "normalized_core": normalized_core.strip(),
         "normalized_query": normalized.strip() or raw,
         "abstract_terms": abstract_terms,
         "year_from": year_from,
@@ -120,7 +121,7 @@ class CrossrefSpec(SourceSpec):
         # Apply preprocessed query if available; add fielded abstract clause for Crossref
         q = args.query
         abs_terms = getattr(args, "abstract_terms", None)
-        if abs_terms:
+        if abs_terms and getattr(args, "enrich_abstracts", True):
             abs_clause = "abstract:(" + " OR ".join(abs_terms) + ")"
             q = f"({q}) AND {abs_clause}" if q else abs_clause
         argv = [sys.executable, str(self.script), q]
@@ -550,6 +551,18 @@ def main():
     p.add_argument("--email", help="Email for Crossref polite pool")
     p.add_argument("--format", dest="format", help="Preferred per-source format when single format is needed (csv|json|jsonl)")
     p.add_argument("--no-enhance", action="store_true", help="Disable enhanced abstracts where available (OpenAlex)")
+    p.add_argument(
+        "--enrich-abstracts",
+        dest="enrich_abstracts",
+        nargs="?",
+        default=True,
+        const=True,
+        type=lambda s: False if isinstance(s, str) and s.lower() in ("false", "0", "no") else True,
+        help=(
+            "Whether to append Abstract(...) terms to queries (and fielded abstract clauses for sources that support it). "
+            "Default: true. Set to 'false' to disable."
+        ),
+    )
     p.add_argument("--resolve-urls", action="store_true", help="Crossref: resolve URLs (slower)")
     p.add_argument("--verbose", action="store_true")
     p.add_argument("--debug", action="store_true")
@@ -601,10 +614,14 @@ def main():
     if args.query:
         _pp = preprocess_user_query(args.query)
         if _pp:
-            # Replace query with normalized version
-            args.query = _pp.get("normalized_query", args.query)
-            # Attach abstract terms for fielded sources
-            setattr(args, "abstract_terms", _pp.get("abstract_terms", []))
+            # Use normalized query; if enrich_abstracts is False, keep only the core (non-abstract) part
+            if getattr(args, "enrich_abstracts", True):
+                args.query = _pp.get("normalized_query", args.query)
+                setattr(args, "abstract_terms", _pp.get("abstract_terms", []))
+            else:
+                # Strip abstract terms entirely from both generic query and fielded sources
+                args.query = _pp.get("normalized_core", args.query)
+                setattr(args, "abstract_terms", [])
             # Set year range if not provided via flags
             if args.year_from is None and _pp.get("year_from") is not None:
                 args.year_from = _pp["year_from"]

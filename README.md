@@ -19,10 +19,10 @@ Demo can be found here: [link](https://stevens0-my.sharepoint.com/:v:/g/personal
 - `--per-provider`: Maximum number of results to fetch per provider (default: 100)  
 - `--out-csv`: Path to output CSV file (default: `results.csv`)  
 - `--out-sqlite`: Path to output SQLite database file (optional)  
-- `--sources`: Comma-separated list of sources to query (e.g., `openalex,crossref,arxiv,springer,ieee`)  
+- `--sources`: Comma-separated list of sources to query (e.g., `openalex,crossref,arxiv,springer,ieee`) (optional, if not provided, will crawl all the sources)
 - `--springer-api-key`: API key for Springer (if available)  
 - `--ieee-api-key`: API key for IEEE Xplore (if available)  
-- `--enrich-abstracts`: Include abstracts in the output when available  
+- `--enrich-abstracts`: Include abstracts in the output when available (Default: True) 
 - `--merge`: Merge results from multiple queries or files  
 
 ### Examples
