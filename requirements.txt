@@ -4,3 +4,4 @@ requests>=2.31.0,<3.0
 # Optional development dependencies
 # mypy>=1.8.0
 # types-requests>=2.31.0.10
+beautifulsoup4>=4.12.0,<5.0
