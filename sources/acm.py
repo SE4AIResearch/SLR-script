@@ -420,14 +420,12 @@ class ACMCrawler:
             "sort": sort
         }
 
-        # Add filters - always filter by ACM DOI prefix
+        # Keep ACM prefix and restore server-side year filtering; keep type filtering disabled
         filters = [f"prefix:{ACM_DOI_PREFIX}"]
         if year_from:
             filters.append(f"from-pub-date:{year_from}-01-01")
         if year_to:
             filters.append(f"until-pub-date:{year_to}-12-31")
-        if content_type:
-            filters.append(f"type:{content_type}")
 
         initial_params["filter"] = ",".join(filters)
 
@@ -638,6 +636,7 @@ class ACMCrawler:
             "sort": "published"
         }
 
+        # Keep ACM prefix and restore server-side year filtering
         filters = [f"prefix:{ACM_DOI_PREFIX}"]
         if year_from:
             filters.append(f"from-pub-date:{year_from}-01-01")

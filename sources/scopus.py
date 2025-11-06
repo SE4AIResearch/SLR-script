@@ -35,12 +35,19 @@ parser = argparse.ArgumentParser(description="Search Scopus and export CSV (titl
 parser.add_argument("query", help="Scopus search query string, e.g., TITLE-ABS-KEY((refactor*) AND (LLM))")
 parser.add_argument("--count", type=int, default=25, help="Items per page (1-200), default 25")
 parser.add_argument("--limit", type=int, help="Optional max total items to fetch across pages. If omitted, fetch all available.")
+parser.add_argument("--year-from", type=int, help="Filter to items published on/after this year (inclusive)")
+parser.add_argument("--year-to", type=int, help="Filter to items published on/before this year (inclusive)")
 parser.add_argument("--output", help="Output CSV file path (default: Scopus_with_abstracts.csv)")
 parser.add_argument("--api-key", dest="api_key", help="Elsevier/Scopus API key. Overrides hardcoded key or ENV ELSEVIER_API_KEY")
 parser.add_argument("--normalize-query", action="store_true", help="Normalize query: collapse whitespace/newlines")
 parser.add_argument("--use-alt-abstracts", action="store_true", default=True,
                     help="Use alternative sources for abstracts")
+parser.add_argument("--no-enhance", action="store_true",
+                    help="Disable alternative abstract fetching (override --use-alt-abstracts)")
 args = parser.parse_args()
+
+if getattr(args, "no_enhance", False):
+    args.use_alt_abstracts = False
 
 # Resolve API key precedence: CLI > ENV > hardcoded
 import os as _os
@@ -63,7 +70,26 @@ def _normalize_query_string(q: str) -> str:
 
 
 # --- Scopus query normalization helpers ---
-_SCOPUS_FIELD_RE = re.compile(r"\b(TITLE-ABS-KEY|TITLE|ABS|KEY)\s*\(", re.IGNORECASE)
+# Expanded set of Scopus field functions we will preserve verbatim
+_SCOPUS_FIELD_NAMES = [
+    # Core text fields
+    "TITLE-ABS-KEY", "TITLE", "ABS", "KEY", "ALL",
+    # Author / affiliation
+    "AUTH", "AUTHOR-NAME", "AUTHLASTNAME", "AUTHFIRST", "AU-ID",
+    "AFFIL", "AF-ID", "AFFILCITY", "AFFILCOUNTRY",
+    # Source / venue
+    "SRCTITLE", "EXACTSRCTITLE",
+    # Identifiers / metadata
+    "EID", "DOI", "ISSN", "ISBN", "ORCID",
+    # Year / type / subject
+    "PUBYEAR", "DOCTYPE", "SUBJAREA", "INDEXTERMS",
+    # Organization
+    "ORG", "ORGID", "ORGNAME"
+]
+_SCOPUS_FIELD_RE = re.compile(
+    rf"\b({'|'.join(map(re.escape, _SCOPUS_FIELD_NAMES))})\s*\(",
+    re.IGNORECASE
+)
 _OPERATOR_SET = {"AND", "OR", "NOT"}
 
 
@@ -142,7 +168,7 @@ def _rebuild_with_generic_quotes(tokens):
             return
 
         # If contains field function, keep as-is
-        if re.search(r"\b(TITLE-ABS-KEY|TITLE|ABS|KEY)\s*\(", seg_text, re.IGNORECASE):
+        if _SCOPUS_FIELD_RE.search(seg_text):
             out.extend(seg)
             seg = []
             return
@@ -155,7 +181,7 @@ def _rebuild_with_generic_quotes(tokens):
 
         # Single-token: quote it
         tok = seg[0]
-        if re.search(r"\b(TITLE-ABS-KEY|TITLE|ABS|KEY)\s*\(", tok, re.IGNORECASE):
+        if _SCOPUS_FIELD_RE.search(tok):
             out.append(tok)
         else:
             out.append(f'"{tok}"')
@@ -208,6 +234,28 @@ def _normalize_scopus_query(q: str) -> str:
         s = _auto_quote_phrases(s)
 
     return s
+
+
+def _build_year_clause(y_from: int | None, y_to: int | None) -> str | None:
+    """Return a Scopus query fragment implementing an inclusive year range.
+    Uses LIMIT-TO(PUBYEAR,YYYY) when the span is short (<=20 years) for
+    maximum compatibility; otherwise falls back to AFT/BEF.
+    """
+    if not y_from and not y_to:
+        return None
+
+    # If both bounds are present and small span, enumerate years
+    if y_from and y_to and y_from <= y_to and (y_to - y_from + 1) <= 20:
+        yrs = [f"LIMIT-TO(PUBYEAR,{y})" for y in range(y_from, y_to + 1)]
+        return "(" + " OR ".join(yrs) + ")"
+
+    # Otherwise, use AFT/BEF with inclusive adjustment
+    parts = []
+    if y_from:
+        parts.append(f"PUBYEAR AFT {y_from - 1}")  # >= y_from
+    if y_to:
+        parts.append(f"PUBYEAR BEF {y_to + 1}")    # <= y_to
+    return "(" + " AND ".join(parts) + ")"
 
 
 def _build_url(base: str, params: dict) -> str:
@@ -319,6 +367,13 @@ def get_metadata(base_url, params, headers, total_limit=None):
 
 
 def parse_metadata(entries):
+    skipped_no_doi = skipped_no_year_with_bounds = skipped_year_out = 0
+
+    skipped_year_out += 1
+
+    skipped_no_year_with_bounds += 1
+
+
     papers_metadata = []
 
     print("\n[INFO] Processing papers and fetching abstracts from alternative sources...")
@@ -327,9 +382,6 @@ def parse_metadata(entries):
         title = entry.get('dc:title', 'N/A')
         doi = entry.get('prism:doi', 'N/A')
 
-        # Skip if no DOI
-        if doi == 'N/A':
-            continue
 
         # Get abstract from multiple sources
         abstract = get_abstract_multi_source(entry, use_alt=args.use_alt_abstracts)
@@ -384,6 +436,26 @@ def parse_metadata(entries):
         authors = _extract_authors(entry)
         year = entry.get('prism:coverDate', '')[:4] if entry.get('prism:coverDate') else 'N/A'
 
+        # Post-filter by year (inclusive) as a safety net
+        try:
+            year_int = int(year) if year and year != 'N/A' else None
+        except ValueError:
+            year_int = None
+
+        yf = getattr(args, 'year_from', None)
+        yt = getattr(args, 'year_to', None)
+        if year_int is not None:
+            if yf is not None and year_int < yf:
+                skipped_year_out += 1
+                continue
+            if yt is not None and year_int > yt:
+                skipped_year_out += 1
+                continue
+        elif yf is not None or yt is not None:
+            skipped_no_year_with_bounds += 1
+            # If year unknown and bounds requested, skip conservatively
+            continue
+
         metadata = {
             'title': title,
             'authors': ", ".join(authors) if authors else 'N/A',
@@ -399,6 +471,11 @@ def parse_metadata(entries):
         }
         papers_metadata.append(metadata)
 
+        # 末尾打印
+    print(f"[DEBUG] Post-filter stats:"
+          f"no_year_with_bounds={skipped_no_year_with_bounds}, "
+          f"year_out_of_range={skipped_year_out}")
+
     return papers_metadata
 
 
@@ -411,6 +488,11 @@ if args.normalize_query:
     print(f"[DEBUG] Normalized query: {query}")
 
 query = _normalize_scopus_query(query)
+
+year_clause = _build_year_clause(args.year_from, args.year_to)
+if year_clause:
+    query = f"{query} AND {year_clause}"
+
 print(f"[DEBUG] Final Scopus query: {query}")
 params['query'] = query
 params['count'] = max(1, min(200, args.count))
@@ -433,6 +515,9 @@ df = df[[col for col in column_order if col in df.columns]]
 # Save to CSV
 output_file = args.output or 'Scopus_with_abstracts.csv'
 df.to_csv(output_file, index=False)
+
+if args.year_from or args.year_to:
+    print(f"[INFO] Year filter applied: from {args.year_from or '-'} to {args.year_to or '-'} (inclusive)")
 
 # Statistics
 total_papers = len(papers_metadata)

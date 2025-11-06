@@ -121,7 +121,7 @@ class CrossrefSpec(SourceSpec):
         # Apply preprocessed query if available; add fielded abstract clause for Crossref
         q = args.query
         abs_terms = getattr(args, "abstract_terms", None)
-        if abs_terms and getattr(args, "enrich_abstracts", True):
+        if abs_terms and getattr(args, "enrich_abstracts", True) and not getattr(args, "no_enhance", False):
             abs_clause = "abstract:(" + " OR ".join(abs_terms) + ")"
             q = f"({q}) AND {abs_clause}" if q else abs_clause
         argv = [sys.executable, str(self.script), q]
@@ -144,6 +144,8 @@ class CrossrefSpec(SourceSpec):
             argv += ["--format", "all"]
         if args.resolve_urls:
             argv += ["--resolve-urls"]
+        if getattr(args, "no_enhance", False):
+            argv += ["--no-enhance-abstracts"]
         return argv, str(out_prefix)
 
 class OpenAlexSpec(SourceSpec):
@@ -216,8 +218,14 @@ class ScopusSpec(SourceSpec):
     def build(self, args, out_dir):
         out_prefix = out_dir / "scopus"
         argv = [sys.executable, str(self.script), args.query, "--output", str(out_prefix) + ".csv"]
+        if args.year_from is not None:
+            argv += ["--year-from", str(args.year_from)]
+        if args.year_to is not None:
+            argv += ["--year-to", str(args.year_to)]
         if args.limit is not None:
             argv += ["--limit", str(args.limit)]
+        if getattr(args, "no_enhance", False):
+            argv += ["--no-enhance"]
         return argv, str(out_prefix)
 
 class SpringerSpec(SourceSpec):
@@ -302,6 +310,25 @@ def discover_latest_csvs(out_dir: Path, allowed_sources: Optional[List[str]] = N
 
 # ---- Helper: De-duplication and CSV loading ----
 from collections import OrderedDict
+
+
+# ---- Helper: Load all CSVs without deduplication ----
+def load_all_csvs(csv_map: Dict[str, Path]) -> List[dict]:
+    """Load multiple CSVs and concatenate all records without de-duplication.
+    Annotates each record with a 'source' derived from the CSV origin if missing.
+    """
+    import csv
+    rows: List[dict] = []
+    for src, path in csv_map.items():
+        if not path.exists():
+            continue
+        with open(path, 'r', encoding='utf-8', newline='') as f:
+            r = csv.DictReader(f)
+            for rec in r:
+                if not (rec.get('source') or rec.get('Source')):
+                    rec['source'] = src
+                rows.append(rec)
+    return rows
 
 def _norm_doi(s: str) -> str:
     if not s:
@@ -455,6 +482,7 @@ def normalize_and_merge(
     sql_db_path: Optional[Path] = None,
     sql_table: str = "papers",
     priority_rank: Optional[Dict[str, int]] = None,
+    dedup: bool = True,
 ) -> int:
     """
     Normalize different CSV schemas into a unified set of columns and merge.
@@ -467,12 +495,15 @@ def normalize_and_merge(
         "venue", "publisher", "keywords", "citations", "published_date", "content_type"
     ]
 
-    # Load & dedup first
-    deduped_records = load_and_dedup_csvs(csv_map, priority_rank=priority_rank)
+    # Load records (either deduplicated or raw concatenation)
+    if dedup:
+        records = load_and_dedup_csvs(csv_map, priority_rank=priority_rank)
+    else:
+        records = load_all_csvs(csv_map)
 
     # Optionally trim to target_limit while preserving order
     if target_limit is not None and target_limit > 0:
-        deduped_records = deduped_records[:target_limit]
+        records = records[:target_limit]
 
     rows: List[Dict[str, str]] = []
 
@@ -481,7 +512,7 @@ def normalize_and_merge(
             return "; ".join(a)
         return a or ""
 
-    for rec in deduped_records:
+    for rec in records:
         source = rec.get("source") or rec.get("Source") or ""
         title = rec.get("title") or rec.get("Title") or rec.get("paper_title") or rec.get("Paper Title") or ""
         authors = rec.get("authors") or rec.get("Authors") or rec.get("author") or ""
@@ -550,7 +581,7 @@ def main():
     p.add_argument("--type", help="Content type filter for sources that support it")
     p.add_argument("--email", help="Email for Crossref polite pool")
     p.add_argument("--format", dest="format", help="Preferred per-source format when single format is needed (csv|json|jsonl)")
-    p.add_argument("--no-enhance", action="store_true", help="Disable enhanced abstracts where available (OpenAlex)")
+    p.add_argument("--no-enhance", dest="no_enhance", action="store_true", help="Disable enhanced abstracts where available (OpenAlex)")
     p.add_argument(
         "--enrich-abstracts",
         dest="enrich_abstracts",
@@ -584,6 +615,7 @@ def main():
     p.add_argument("--out-dir", default="results", help="Directory to store outputs")
     p.add_argument("--formats", help="Comma-separated formats to request when supported (csv,json,jsonl). If multiple, 'all' will be used when available.")
     p.add_argument("--merge", action="store_true", help="Normalize & merge per-source CSVs into one CSV")
+    p.add_argument("--no-dedup", action="store_true", help="When used with --merge, skip de-duplication and keep all rows from every source.")
     p.add_argument("--save-sql", action="store_true", help="Also save merged (deduped) results to a SQLite database.")
     p.add_argument("--sql-db", help="Path to SQLite DB file (default: <out-dir>/merged_all_sources.sqlite)")
     p.add_argument("--sql-table", default="papers", help="Table name for SQLite output (default: papers)")
@@ -615,7 +647,7 @@ def main():
         _pp = preprocess_user_query(args.query)
         if _pp:
             # Use normalized query; if enrich_abstracts is False, keep only the core (non-abstract) part
-            if getattr(args, "enrich_abstracts", True):
+            if getattr(args, "enrich_abstracts", True) and not getattr(args, "no_enhance", False):
                 args.query = _pp.get("normalized_query", args.query)
                 setattr(args, "abstract_terms", _pp.get("abstract_terms", []))
             else:
@@ -670,56 +702,78 @@ def main():
         rc = run_cmd(argv)
         results[key] = f"exit={rc}; out_prefix={out_prefix}"
 
-    # Merge CSVs if requested (with de-dup) and optionally re-crawl until target unique count >= args.limit
+    # Merge CSVs if requested (with de-dup or not) and optionally re-crawl until target unique count >= args.limit
     if args.merge:
         merged_path = out_dir / "merged_all_sources.csv"
-        attempt = 0
-        max_attempts = 3  # you can tweak this if needed
-        growth = 1.5      # per attempt, increase per-source limit by 50%
-        target_unique = args.limit if args.limit else None
+        csv_map = discover_latest_csvs(out_dir, allowed_sources=chosen)
+        if not csv_map:
+            print("[WARN] No per-source CSVs found to merge. Skipping merging.", file=sys.stderr)
+        else:
+            dedup_flag = not args.no_dedup
+            if dedup_flag:
+                attempt = 0
+                max_attempts = 3  # you can tweak this if needed
+                growth = 1.5      # per attempt, increase per-source limit by 50%
+                target_unique = args.limit if args.limit else None
 
-        while True:
-            csv_map = discover_latest_csvs(out_dir, allowed_sources=chosen)
-            if not csv_map:
-                print("[WARN] No per-source CSVs found to merge. Skipping merging.", file=sys.stderr)
-                # If nothing to merge, avoid referencing merged_path later
-                target_unique = None
-                break
-            # Do not trim to target here; we want to see how many we have
-            unique_count = normalize_and_merge(csv_map, merged_path, target_limit=None, sql_db_path=sql_db_path, sql_table=args.sql_table, priority_rank=priority_rank)
-            print(f"[OK] Merged (deduped) rows: {unique_count}. Written to: {merged_path}")
+                while True:
+                    # Merge with de-dup
+                    unique_count = normalize_and_merge(
+                        csv_map, merged_path, target_limit=None,
+                        sql_db_path=sql_db_path, sql_table=args.sql_table,
+                        priority_rank=priority_rank, dedup=True
+                    )
+                    print(f"[OK] Merged (deduped) rows: {unique_count}. Written to: {merged_path}")
 
-            if not target_unique or unique_count >= target_unique or attempt >= max_attempts:
-                # If target provided and we have more than needed, trim to target
-                if target_unique and unique_count > target_unique:
-                    _ = normalize_and_merge(csv_map, merged_path, target_limit=target_unique, sql_db_path=sql_db_path, sql_table=args.sql_table, priority_rank=priority_rank)
-                    print(f"[OK] Trimmed merged CSV to target {target_unique} rows.")
-                break
+                    if not target_unique or unique_count >= target_unique or attempt >= max_attempts:
+                        if target_unique and unique_count > target_unique:
+                            _ = normalize_and_merge(
+                                csv_map, merged_path, target_limit=target_unique,
+                                sql_db_path=sql_db_path, sql_table=args.sql_table,
+                                priority_rank=priority_rank, dedup=True
+                            )
+                            print(f"[OK] Trimmed merged CSV to target {target_unique} rows.")
+                        break
 
-            # Not enough unique rows; increase per-source limit and re-run sources
-            attempt += 1
-            prev_limit = args.limit or 100
-            new_limit = int(prev_limit * growth)
-            if new_limit == prev_limit:
-                new_limit += 50
-            args.limit = new_limit
-            print(f"[INFO] Unique < target ({unique_count} < {target_unique}). Increasing per-source limit to {args.limit} and re-running sources (attempt {attempt}/{max_attempts})...")
+                    # Not enough unique rows; increase per-source limit and re-run sources
+                    attempt += 1
+                    prev_limit = args.limit or 100
+                    new_limit = int(prev_limit * growth)
+                    if new_limit == prev_limit:
+                        new_limit += 50
+                    args.limit = new_limit
+                    print(f"[INFO] Unique < target ({unique_count} < {target_unique}). Increasing per-source limit to {args.limit} and re-running sources (attempt {attempt}/{max_attempts})...")
 
-            # Re-run the selected sources with higher limit
-            for key in chosen:
-                spec = SOURCES[key]
-                if not spec.script.exists():
-                    continue
-                argv, _ = spec.build(args, out_dir)
-                _ = run_cmd(argv)
+                    # Re-run the selected sources with higher limit
+                    for key in chosen:
+                        spec = SOURCES[key]
+                        if not spec.script.exists():
+                            continue
+                        argv, _ = spec.build(args, out_dir)
+                        _ = run_cmd(argv)
+                    # Refresh csv_map after re-run
+                    csv_map = discover_latest_csvs(out_dir, allowed_sources=chosen)
 
-        # After loop, ensure final file is trimmed to target if needed
-        if target_unique:
-            csv_map = discover_latest_csvs(out_dir, allowed_sources=chosen)
-            if csv_map:
-                _ = normalize_and_merge(csv_map, merged_path, target_limit=target_unique, sql_db_path=sql_db_path, sql_table=args.sql_table, priority_rank=priority_rank)
+                # Final trim if needed
+                if target_unique:
+                    csv_map = discover_latest_csvs(out_dir, allowed_sources=chosen)
+                    if csv_map:
+                        _ = normalize_and_merge(
+                            csv_map, merged_path, target_limit=target_unique,
+                            sql_db_path=sql_db_path, sql_table=args.sql_table,
+                            priority_rank=priority_rank, dedup=True
+                        )
+                    else:
+                        print("[WARN] No per-source CSVs found to finalize trim; skipping final trim.", file=sys.stderr)
             else:
-                print("[WARN] No per-source CSVs found to finalize trim; skipping final trim.", file=sys.stderr)
+                # No de-dup: single pass concatenate and optional trim
+                total_rows = normalize_and_merge(
+                    csv_map, merged_path,
+                    target_limit=(args.limit if args.limit else None),
+                    sql_db_path=sql_db_path, sql_table=args.sql_table,
+                    priority_rank=priority_rank, dedup=False
+                )
+                print(f"[OK] Merged (no dedup) rows: {total_rows}. Written to: {merged_path}")
 
     # Save a small run manifest for traceability
     manifest = {

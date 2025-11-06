@@ -410,7 +410,7 @@ class CrossrefCrawler:
         query: str,
         year_from: Optional[int] = None,
         year_to: Optional[int] = None,
-        limit: Optional[int] = None,  # 修改为可选参数
+        limit: Optional[int] = None,
         sort: str = "relevance",
         filter_type: Optional[str] = None,
         resolve_urls: Optional[bool] = None
@@ -447,10 +447,10 @@ class CrossrefCrawler:
         if resolve_urls:
             print("Note: Resolving actual URLs (this may take longer)...")
 
-        # 首先获取总数量信息
+
         initial_params = {
             "query": query,
-            "rows": 1,  # 只获取一条记录来查看总数
+            "rows": 1,
             "cursor": "*",
             "sort": sort
         }
@@ -473,7 +473,7 @@ class CrossrefCrawler:
             total_results = data.get("message", {}).get("total-results", 0)
             print(f"Total available results: {total_results}")
 
-            # 如果设置了limit，使用较小的值
+
             if limit is not None:
                 target_count = min(limit, total_results)
                 print(f"Will fetch: {target_count} papers")
@@ -485,11 +485,9 @@ class CrossrefCrawler:
             print(f"Warning: Could not get total count: {e}")
             target_count = limit if limit is not None else float('inf')
 
-        # 重置cursor开始正式爬取
         cursor = "*"
 
         while True:
-            # 计算这次请求需要多少条记录
             if limit is not None:
                 remaining = limit - len(papers)
                 if remaining <= 0:
@@ -731,7 +729,7 @@ def main():
             query=args.query,
             year_from=args.year_from,
             year_to=args.year_to,
-            limit=args.limit,  # 现在可以是None
+            limit=args.limit,
             sort=args.sort,
             filter_type=args.type
         )
