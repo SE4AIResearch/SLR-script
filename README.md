@@ -11,6 +11,17 @@ Demo can be found here: [link](https://stevens0-my.sharepoint.com/:v:/g/personal
 
 ## Usage
 
+### Notes on Search Behavior Across Databases
+
+Different data providers handle search queries differently. This script does not enforce a unified search model across all databases, so the same query string may be applied to different fields depending on the provider:
+
+- **Scopus**: Queries are applied to **TITLE-ABS-KEY**, meaning only the **title, abstract, and author keywords** are searched. Scopus does **not** support full-text search in this mode.
+- **ScienceDirect**: The query is applied to the **full record**, which may include more fields than Scopus. However, this should not be interpreted as guaranteed PDF full-text search, but it generally searches more metadata fields.
+- **ACM (via Crossref in this script)**: Searches are performed over **bibliographic metadata** through Crossref and filtered by ACM DOI prefixes. This is **not** equivalent to ACM full-text search from the ACM Digital Library.
+- **OpenAlex and arXiv**: These providers support broader or more flexible search capabilities (e.g., OpenAlex may include abstract and available full-text sources; arXiv supports field-based queries such as `ti:` or `abs:`).
+
+Because of these differences, the **same search string may return different levels of recall across providers**. If your study requires more consistent or stricter search scope across databases, you may need to adjust queries or enable provider-specific field filters.
+
 ### Command-line Options
 - `query` (positional): Your search string, e.g., `"machine learning"`  
 - `--year-from`: Lower bound year (inclusive) to filter results  
