@@ -237,7 +237,6 @@ class OpenAlexCrawler:
             queries = [query]
 
         all_results = []
-        seen_ids = set()
 
         for q_idx, q_simple in enumerate(queries):
             if len(all_results) >= limit:
@@ -276,12 +275,7 @@ class OpenAlexCrawler:
                             break
 
                         paper = self._parse_work(work)
-
-                        # Deduplicate by OpenAlex ID or DOI
-                        paper_id = paper.openalex_id or paper.doi or _norm_title(paper.title)
-                        if paper_id not in seen_ids:
-                            seen_ids.add(paper_id)
-                            all_results.append(paper)
+                        all_results.append(paper)
 
                     page += 1
 

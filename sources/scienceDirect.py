@@ -110,19 +110,10 @@ class ScienceDirectScraper:
                                                     limit - len(papers) if limit else None)
             papers.extend(crossref_papers)
 
-        # Deduplicate by DOI
-        seen_dois = set()
-        unique_papers = []
-        for paper in papers:
-            if paper.doi and paper.doi not in seen_dois:
-                seen_dois.add(paper.doi)
-                unique_papers.append(paper)
-            elif not paper.doi:
-                unique_papers.append(paper)
-
+        # No deduplication: return raw concatenated results (Elsevier + CrossRef)
         if limit:
-            return unique_papers[:limit]
-        return unique_papers
+            return papers[:limit]
+        return papers
 
     def _search_elsevier_api(self,
                              query: str,

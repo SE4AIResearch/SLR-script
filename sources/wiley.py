@@ -103,7 +103,6 @@ class WileyScraper:
             search_queries = [query]
 
         all_papers = []
-        seen_dois = set()
 
         for i, search_query in enumerate(search_queries):
             if limit and len(all_papers) >= limit:
@@ -113,16 +112,10 @@ class WileyScraper:
             papers = self._search_crossref(search_query, year_from, year_to,
                                            limit - len(all_papers) if limit else None)
 
-            # Deduplicate and enhance with abstracts
+            # No deduplication: enhance abstracts and append all results
             for paper in papers:
-                if paper.doi and paper.doi not in seen_dois:
-                    seen_dois.add(paper.doi)
-                    enhanced_paper = self._enhance_paper_with_abstract(paper)
-                    all_papers.append(enhanced_paper)
-                elif not paper.doi:
-                    # Include papers without DOI (rare but possible)
-                    enhanced_paper = self._enhance_paper_with_abstract(paper)
-                    all_papers.append(enhanced_paper)
+                enhanced_paper = self._enhance_paper_with_abstract(paper)
+                all_papers.append(enhanced_paper)
 
             time.sleep(self.delay)
 

@@ -117,7 +117,7 @@ class SourceSpec:
 
 class CrossrefSpec(SourceSpec):
     def build(self, args, out_dir):
-        out_prefix = out_dir / "crossref"
+        out_prefix = out_dir / "phase_1" / "crossref"
         # Apply preprocessed query if available; add fielded abstract clause for Crossref
         q = args.query
         abs_terms = getattr(args, "abstract_terms", None)
@@ -150,7 +150,7 @@ class CrossrefSpec(SourceSpec):
 
 class OpenAlexSpec(SourceSpec):
     def build(self, args, out_dir):
-        out_prefix = out_dir / "openalex"
+        out_prefix = out_dir / "phase_1" / "openalex"
         argv = [sys.executable, str(self.script)]
         if args.doi:
             argv += ["--doi", args.doi]
@@ -169,7 +169,7 @@ class OpenAlexSpec(SourceSpec):
 
 class ACMSpec(SourceSpec):
     def build(self, args, out_dir):
-        out_prefix = out_dir / "acm"
+        out_prefix = out_dir / "phase_1" / "acm"
         argv = [sys.executable, str(self.script)]
         # Parent-level options must appear before the subcommand in argparse
         if args.limit is not None:     argv += ["--limit", str(args.limit)]
@@ -185,7 +185,7 @@ class ACMSpec(SourceSpec):
 
 class ArxivSpec(SourceSpec):
     def build(self, args, out_dir):
-        out_prefix = out_dir / "arxiv"
+        out_prefix = out_dir / "phase_1" / "arxiv"
         argv = [sys.executable, str(self.script), args.query]
         # Prefer explicit --max-results; otherwise map runner --limit to arxiv --max-results
         if args.max_results is not None:
@@ -201,7 +201,7 @@ class ArxivSpec(SourceSpec):
 
 class ScienceDirectSpec(SourceSpec):
     def build(self, args, out_dir):
-        out_prefix = out_dir / "sciencedirect"
+        out_prefix = out_dir / "phase_1" / "sciencedirect"
         argv = [sys.executable, str(self.script), args.query]
         if args.year_from is not None: argv += ["--year-from", str(args.year_from)]
         if args.year_to   is not None: argv += ["--year-to",   str(args.year_to)]
@@ -216,7 +216,7 @@ class ScienceDirectSpec(SourceSpec):
 
 class ScopusSpec(SourceSpec):
     def build(self, args, out_dir):
-        out_prefix = out_dir / "scopus"
+        out_prefix = out_dir / "phase_1" / "scopus"
         argv = [sys.executable, str(self.script), args.query, "--output", str(out_prefix) + ".csv"]
         if args.year_from is not None:
             argv += ["--year-from", str(args.year_from)]
@@ -230,7 +230,7 @@ class ScopusSpec(SourceSpec):
 
 class SpringerSpec(SourceSpec):
     def build(self, args, out_dir):
-        out_prefix = out_dir / "springer"
+        out_prefix = out_dir / "phase_1" / "springer"
         argv = [sys.executable, str(self.script), args.query]
         if args.max_pages is not None: argv += ["--max-pages", str(args.max_pages)]
         if args.discipline:            argv += ["--discipline", args.discipline]
@@ -242,7 +242,7 @@ class SpringerSpec(SourceSpec):
 
 class WileySpec(SourceSpec):
     def build(self, args, out_dir):
-        out_prefix = out_dir / "wiley"
+        out_prefix = out_dir / "phase_1" / "wiley"
         argv = [sys.executable, str(self.script), args.query]
         if args.year_from is not None: argv += ["--year-from", str(args.year_from)]
         if args.year_to   is not None: argv += ["--year-to",   str(args.year_to)]
@@ -281,7 +281,7 @@ def run_cmd(argv: List[str]) -> int:
         print(f"[ERROR] Command not found: {argv[0]}")
         return 127
 
-def discover_latest_csvs(out_dir: Path, allowed_sources: Optional[List[str]] = None) -> Dict[str, Path]:
+def discover_latest_csvs(base_dir: Path, allowed_sources: Optional[List[str]] = None) -> Dict[str, Path]:
     """Find per-source CSVs saved by scripts (best-effort). If allowed_sources is provided, restrict to those."""
     found: Dict[str, Path] = {}
     preferred = ["crossref", "openalex", "acm", "arxiv", "sciencedirect", "scopus", "wiley", "springer"]
@@ -294,16 +294,16 @@ def discover_latest_csvs(out_dir: Path, allowed_sources: Optional[List[str]] = N
             candidates = []
             if springer_dir.exists():
                 candidates = sorted(springer_dir.glob("springer_*.csv"))
-            # Also check current out_dir for timestamped files (some scripts now write here)
-            more = sorted(out_dir.glob("springer_*.csv"))
+            # Also check current base_dir for timestamped files (some scripts now write here)
+            more = sorted(base_dir.glob("springer_*.csv"))
             candidates = sorted(candidates + more)
-            # And check for a plain springer.csv in out_dir
-            if (out_dir / "springer.csv").exists():
-                candidates.append(out_dir / "springer.csv")
+            # And check for a plain springer.csv in base_dir
+            if (base_dir / "springer.csv").exists():
+                candidates.append(base_dir / "springer.csv")
             if candidates:
                 found["springer"] = candidates[-1]
             continue
-        p = out_dir / f"{key}.csv"
+        p = base_dir / f"{key}.csv"
         if p.exists():
             found[key] = p
     return found
@@ -330,6 +330,7 @@ def load_all_csvs(csv_map: Dict[str, Path]) -> List[dict]:
                 rows.append(rec)
     return rows
 
+
 def _norm_doi(s: str) -> str:
     if not s:
         return ""
@@ -337,6 +338,18 @@ def _norm_doi(s: str) -> str:
     s = _re.sub(r'^https?://(dx\.)?doi\.org/', '', s)
     s = _re.sub(r'^doi:\s*', '', s)
     return s
+
+def _is_valid_doi(s: str) -> bool:
+    """Return True if s looks like a real DOI (e.g., 10.xxxx/...). Reject placeholders like N/A, -, none, null."""
+    if not s:
+        return False
+    s = str(s).strip().lower()
+    # Reject common placeholders
+    if s in {"n/a", "na", "none", "null", "-", "n.a", "n a", "n\u00a0/a"}:
+        return False
+    s = _norm_doi(s)
+    # Basic DOI shape: 10.<4-9 digits>/<non-space>
+    return bool(_re.match(r'^10\.\d{4,9}/\S+$', s))
 
 def _norm_title(s: str) -> str:
     if not s:
@@ -353,7 +366,7 @@ def _rec_has_abstract(rec: dict) -> bool:
 
 def _dedup_key(rec: dict) -> str:
     doi = _norm_doi(rec.get('doi') or rec.get('DOI') or '')
-    if doi:
+    if _is_valid_doi(doi):
         return f"doi::{doi}"
     title = _norm_title(rec.get('title') or rec.get('Title') or rec.get('paper_title') or rec.get('Paper Title') or '')
     year = str(rec.get('year') or rec.get('Year') or rec.get('published year') or rec.get('Published Year') or '').strip()
@@ -483,6 +496,7 @@ def normalize_and_merge(
     sql_table: str = "papers",
     priority_rank: Optional[Dict[str, int]] = None,
     dedup: bool = True,
+    drop_empty_doi: bool = False,
 ) -> int:
     """
     Normalize different CSV schemas into a unified set of columns and merge.
@@ -501,6 +515,13 @@ def normalize_and_merge(
     else:
         records = load_all_csvs(csv_map)
 
+    # Optionally drop records with empty DOI (for phase 2)
+    if drop_empty_doi:
+        def _has_doi(r: dict) -> bool:
+            raw = r.get('doi') or r.get('DOI') or r.get('Doi') or ''
+            return _is_valid_doi(raw)
+        records = [r for r in records if _has_doi(r)]
+
     # Optionally trim to target_limit while preserving order
     if target_limit is not None and target_limit > 0:
         records = records[:target_limit]
@@ -517,7 +538,10 @@ def normalize_and_merge(
         title = rec.get("title") or rec.get("Title") or rec.get("paper_title") or rec.get("Paper Title") or ""
         authors = rec.get("authors") or rec.get("Authors") or rec.get("author") or ""
         year = rec.get("year") or rec.get("Year") or rec.get("published year") or rec.get("Published Year") or ""
-        doi = rec.get("doi") or rec.get("DOI") or ""
+        doi_raw = rec.get("doi") or rec.get("DOI") or rec.get("Doi") or ""
+        doi = _norm_doi(doi_raw)
+        if not _is_valid_doi(doi):
+            doi = ""
         url = rec.get("url") or rec.get("URL") or rec.get("link") or rec.get("Link") or ""
         abstract = rec.get("abstract") or rec.get("Abstract") or ""
         venue = rec.get("venue") or rec.get("Venue") or rec.get("journal") or rec.get("Journal") or ""
@@ -616,7 +640,9 @@ def main():
     p.add_argument("--formats", help="Comma-separated formats to request when supported (csv,json,jsonl). If multiple, 'all' will be used when available.")
     p.add_argument("--merge", action="store_true", help="Normalize & merge per-source CSVs into one CSV")
     p.add_argument("--no-dedup", action="store_true", help="When used with --merge, skip de-duplication and keep all rows from every source.")
-    p.add_argument("--save-sql", action="store_true", help="Also save merged (deduped) results to a SQLite database.")
+    # Accept both --save-sql and --save_sql
+    p.add_argument("--save-sql", "--save_sql", dest="save_sql", action="store_true",
+                   help="Also save merged (deduped) results to a SQLite database.")
     p.add_argument("--sql-db", help="Path to SQLite DB file (default: <out-dir>/merged_all_sources.sqlite)")
     p.add_argument("--sql-table", default="papers", help="Table name for SQLite output (default: papers)")
 
@@ -661,7 +687,11 @@ def main():
                 args.year_to = _pp["year_to"]
 
     out_dir = Path(args.out_dir).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # Two-phase output directories
+    phase1_dir = out_dir / "phase_1"
+    phase2_dir = out_dir / "phase_2"
+    phase1_dir.mkdir(parents=True, exist_ok=True)
+    phase2_dir.mkdir(parents=True, exist_ok=True)
     sql_db_path = None
     if args.save_sql:
         sql_db_path = Path(args.sql_db) if args.sql_db else (out_dir / "merged_all_sources.sqlite")
@@ -684,7 +714,7 @@ def main():
     if args.fresh:
         for key in chosen:
             for ext in (".csv", ".json", ".jsonl"):
-                fp = out_dir / f"{key}{ext}"
+                fp = (phase1_dir / f"{key}{ext}")
                 if fp.exists():
                     try:
                         fp.unlink()
@@ -702,48 +732,66 @@ def main():
         rc = run_cmd(argv)
         results[key] = f"exit={rc}; out_prefix={out_prefix}"
 
-    # Merge CSVs if requested (with de-dup or not) and optionally re-crawl until target unique count >= args.limit
+    # Merge CSVs into two phases if requested
     if args.merge:
-        merged_path = out_dir / "merged_all_sources.csv"
-        csv_map = discover_latest_csvs(out_dir, allowed_sources=chosen)
-        if not csv_map:
-            print("[WARN] No per-source CSVs found to merge. Skipping merging.", file=sys.stderr)
+        # Phase 1: concatenate without deduplication and keep empty DOIs
+        merged_phase1 = phase1_dir / "merged_all_sources.csv"
+        csv_map_p1 = discover_latest_csvs(phase1_dir, allowed_sources=chosen)
+        if not csv_map_p1:
+            print("[WARN] No per-source CSVs found in phase_1 to merge. Skipping.", file=sys.stderr)
         else:
-            dedup_flag = not args.no_dedup
-            if dedup_flag:
+            total_rows = normalize_and_merge(
+                csv_map_p1, merged_phase1,
+                target_limit=(args.limit if args.limit else None),
+                sql_db_path=(phase1_dir / "merged_all_sources.sqlite" if args.save_sql else None),
+                sql_table=args.sql_table,
+                priority_rank=None,
+                dedup=False,
+                drop_empty_doi=False,
+            )
+            print(f"[OK] Phase 1 merged (no dedup, keep empty DOI) rows: {total_rows}. Written to: {merged_phase1}")
+
+        # Phase 2: deduplicate and drop empty DOI
+        merged_phase2 = phase2_dir / "merged_all_sources.csv"
+        csv_map_p2 = discover_latest_csvs(phase1_dir, allowed_sources=chosen)
+        if not csv_map_p2:
+            print("[WARN] No per-source CSVs found in phase_1 to build phase_2. Skipping.", file=sys.stderr)
+        else:
+            if args.limit:
+                # Attempt iterative re-crawl to reach target unique count under dedup + DOI filter
                 attempt = 0
-                max_attempts = 3  # you can tweak this if needed
-                growth = 1.5      # per attempt, increase per-source limit by 50%
-                target_unique = args.limit if args.limit else None
-
+                max_attempts = 3
+                growth = 1.5
+                target_unique = args.limit
                 while True:
-                    # Merge with de-dup
                     unique_count = normalize_and_merge(
-                        csv_map, merged_path, target_limit=None,
-                        sql_db_path=sql_db_path, sql_table=args.sql_table,
-                        priority_rank=priority_rank, dedup=True
+                        csv_map_p2, merged_phase2, target_limit=None,
+                        sql_db_path=(phase2_dir / "merged_all_sources.sqlite" if args.save_sql else None),
+                        sql_table=args.sql_table,
+                        priority_rank={name: idx for idx, name in enumerate(chosen)},
+                        dedup=True,
+                        drop_empty_doi=True,
                     )
-                    print(f"[OK] Merged (deduped) rows: {unique_count}. Written to: {merged_path}")
-
-                    if not target_unique or unique_count >= target_unique or attempt >= max_attempts:
-                        if target_unique and unique_count > target_unique:
+                    print(f"[OK] Phase 2 merged (dedup + drop empty DOI) rows: {unique_count}. Written to: {merged_phase2}")
+                    if unique_count >= target_unique or attempt >= max_attempts:
+                        if unique_count > target_unique:
                             _ = normalize_and_merge(
-                                csv_map, merged_path, target_limit=target_unique,
-                                sql_db_path=sql_db_path, sql_table=args.sql_table,
-                                priority_rank=priority_rank, dedup=True
+                                csv_map_p2, merged_phase2, target_limit=target_unique,
+                                sql_db_path=(phase2_dir / "merged_all_sources.sqlite" if args.save_sql else None),
+                                sql_table=args.sql_table,
+                                priority_rank={name: idx for idx, name in enumerate(chosen)},
+                                dedup=True,
+                                drop_empty_doi=True,
                             )
-                            print(f"[OK] Trimmed merged CSV to target {target_unique} rows.")
+                            print(f"[OK] Phase 2 trimmed to target {target_unique} rows.")
                         break
-
-                    # Not enough unique rows; increase per-source limit and re-run sources
                     attempt += 1
                     prev_limit = args.limit or 100
                     new_limit = int(prev_limit * growth)
                     if new_limit == prev_limit:
                         new_limit += 50
                     args.limit = new_limit
-                    print(f"[INFO] Unique < target ({unique_count} < {target_unique}). Increasing per-source limit to {args.limit} and re-running sources (attempt {attempt}/{max_attempts})...")
-
+                    print(f"[INFO] Phase 2 unique < target ({unique_count} < {target_unique}). Increasing per-source limit to {args.limit} and re-running sources...")
                     # Re-run the selected sources with higher limit
                     for key in chosen:
                         spec = SOURCES[key]
@@ -751,34 +799,26 @@ def main():
                             continue
                         argv, _ = spec.build(args, out_dir)
                         _ = run_cmd(argv)
-                    # Refresh csv_map after re-run
-                    csv_map = discover_latest_csvs(out_dir, allowed_sources=chosen)
-
-                # Final trim if needed
-                if target_unique:
-                    csv_map = discover_latest_csvs(out_dir, allowed_sources=chosen)
-                    if csv_map:
-                        _ = normalize_and_merge(
-                            csv_map, merged_path, target_limit=target_unique,
-                            sql_db_path=sql_db_path, sql_table=args.sql_table,
-                            priority_rank=priority_rank, dedup=True
-                        )
-                    else:
-                        print("[WARN] No per-source CSVs found to finalize trim; skipping final trim.", file=sys.stderr)
+                    # Refresh csv_map after re-run (from phase_1)
+                    csv_map_p2 = discover_latest_csvs(phase1_dir, allowed_sources=chosen)
             else:
-                # No de-dup: single pass concatenate and optional trim
-                total_rows = normalize_and_merge(
-                    csv_map, merged_path,
-                    target_limit=(args.limit if args.limit else None),
-                    sql_db_path=sql_db_path, sql_table=args.sql_table,
-                    priority_rank=priority_rank, dedup=False
+                unique_count = normalize_and_merge(
+                    csv_map_p2, merged_phase2,
+                    target_limit=None,
+                    sql_db_path=(phase2_dir / "merged_all_sources.sqlite" if args.save_sql else None),
+                    sql_table=args.sql_table,
+                    priority_rank={name: idx for idx, name in enumerate(chosen)},
+                    dedup=True,
+                    drop_empty_doi=True,
                 )
-                print(f"[OK] Merged (no dedup) rows: {total_rows}. Written to: {merged_path}")
+                print(f"[OK] Phase 2 merged (dedup + drop empty DOI) rows: {unique_count}. Written to: {merged_phase2}")
 
     # Save a small run manifest for traceability
     manifest = {
         "args": vars(args),
         "results": results,
+        "phase_1_dir": str(phase1_dir),
+        "phase_2_dir": str(phase2_dir),
     }
     with open(out_dir / "run_manifest.json", "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
