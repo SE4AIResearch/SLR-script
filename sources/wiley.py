@@ -119,9 +119,31 @@ class WileyScraper:
 
             time.sleep(self.delay)
 
+        # Deduplicate results across expanded queries
+        unique_papers: List[WileyPaper] = []
+        seen_keys = set()
+
+        for paper in all_papers:
+            # Prefer DOI-based key; fall back to (title, year) when DOI is missing
+            if paper.doi:
+                key = ("doi", paper.doi.strip().lower())
+            else:
+                title_key = (paper.title or "").strip().lower()
+                key = ("title_year", title_key, paper.year)
+
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            unique_papers.append(paper)
+
+        if self.verbose and len(unique_papers) != len(all_papers):
+            removed = len(all_papers) - len(unique_papers)
+            print(f"  🔁 Deduplicated Wiley results: removed {removed} duplicates "
+                  f"({len(unique_papers)} unique papers).")
+
         if limit:
-            return all_papers[:limit]
-        return all_papers
+            return unique_papers[:limit]
+        return unique_papers
 
     def _enhance_paper_with_abstract(self, paper: WileyPaper) -> WileyPaper:
         """
