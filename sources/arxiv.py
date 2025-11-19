@@ -216,7 +216,9 @@ class ArxivCrawler:
                max_results: Optional[int] = None,
                sort_by: str = "relevance",
                sort_order: str = "descending",
-               start: int = 0) -> List[ArxivPaper]:
+               start: int = 0,
+               year_from: Optional[int] = None,
+               year_to: Optional[int] = None) -> List[ArxivPaper]:
         """
         Search ArXiv for papers
 
@@ -231,22 +233,14 @@ class ArxivCrawler:
             List of ArxivPaper objects
         """
         papers = []
-        batch_size = 100  # ArXiv API限制每次最多100条
+        batch_size = 100
 
         # Check if query needs simplification
         has_complex_boolean = ('(' in query and ')' in query and
                                any(op in query.upper() for op in ['AND', 'OR']))
 
-        if has_complex_boolean:
-            # Simplify for ArXiv
-            simplified = self._simplify_query(query)
-            search_query = f"all:{simplified}"
-            print(f"Simplified complex query to: {search_query}")
-        else:
-            # Use query as-is
-            search_query = query
+        search_query = query
 
-        # 首先获取总数量信息
         initial_params = {
             "search_query": search_query,
             "start": start,
@@ -353,6 +347,33 @@ class ArxivCrawler:
             except Exception as e:
                 print(f"Error fetching results: {e}")
                 break
+
+        # Apply publication year filter if provided
+        if year_from is not None or year_to is not None:
+            filtered = []
+            for p in papers:
+                year = None
+                if p.published_date:
+                    # Expect formats like "2023-04-21T16:00:00Z" or "2023-04-21"
+                    m = re.match(r"(\d{4})", p.published_date)
+                    if m:
+                        try:
+                            year = int(m.group(1))
+                        except ValueError:
+                            year = None
+
+                # If we cannot parse a year and a range is requested, skip the paper
+                if year is None:
+                    continue
+
+                if year_from is not None and year < year_from:
+                    continue
+                if year_to is not None and year > year_to:
+                    continue
+
+                filtered.append(p)
+
+            papers = filtered
 
         # 如果设置了限制，确保不超过限制
         if max_results is not None:
@@ -471,6 +492,16 @@ def main():
         help="Starting index for pagination (default: 0)"
     )
     parser.add_argument(
+        "--year-from",
+        type=int,
+        help="Filter by publication year (inclusive lower bound)"
+    )
+    parser.add_argument(
+        "--year-to",
+        type=int,
+        help="Filter by publication year (inclusive upper bound)"
+    )
+    parser.add_argument(
         "--author",
         help="Search by author name"
     )
@@ -520,7 +551,9 @@ def main():
             max_results=args.max_results,
             sort_by=args.sort_by,
             sort_order=args.sort_order,
-            start=args.start
+            start=args.start,
+            year_from=args.year_from,
+            year_to=args.year_to,
         )
     else:
         print("Please provide a search query, author, category, or ArXiv ID")
@@ -537,7 +570,6 @@ def main():
 
         print(f"\nFound {len(papers)} papers")
 
-        # 显示示例结果
         if papers:
             print("\nSample results:")
             for i, paper in enumerate(papers[:3], 1):

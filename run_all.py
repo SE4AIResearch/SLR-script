@@ -127,7 +127,9 @@ class CrossrefSpec(SourceSpec):
         argv = [sys.executable, str(self.script), q]
         if args.year_from is not None: argv += ["--year-from", str(args.year_from)]
         if args.year_to   is not None: argv += ["--year-to",   str(args.year_to)]
-        if args.limit     is not None: argv += ["--limit",     str(args.limit)]
+        limit_per_source = getattr(args, "limit_per_source", None)
+        if limit_per_source is not None:
+            argv += ["--limit", str(limit_per_source)]
         if args.sort is not None:      argv += ["--sort", args.sort]
         if args.type:                  argv += ["--type", args.type]
         if args.email:                 argv += ["--email", args.email]
@@ -158,12 +160,13 @@ class OpenAlexSpec(SourceSpec):
             argv += [args.query]
         if args.year_from is not None: argv += ["--year-from", str(args.year_from)]
         if args.year_to   is not None: argv += ["--year-to",   str(args.year_to)]
-        if args.limit     is not None: argv += ["--limit",     str(args.limit)]
+        limit_per_source = getattr(args, "limit_per_source", None)
+        if limit_per_source is not None:
+            argv += ["--limit", str(limit_per_source)]
         if args.per_page  is not None: argv += ["--per-page",  str(args.per_page)]
         if args.no_enhance:            argv += ["--no-enhance"]
         if args.verbose:               argv += ["--verbose"]
         if args.debug:                 argv += ["--debug"]
-        argv += ["--out-csv",  str(out_prefix) + ".csv"]
         argv += ["--out-jsonl",str(out_prefix) + ".jsonl"]
         return argv, str(out_prefix)
 
@@ -172,7 +175,9 @@ class ACMSpec(SourceSpec):
         out_prefix = out_dir / "phase_1" / "acm"
         argv = [sys.executable, str(self.script)]
         # Parent-level options must appear before the subcommand in argparse
-        if args.limit is not None:     argv += ["--limit", str(args.limit)]
+        limit_per_source = getattr(args, "limit_per_source", None)
+        if limit_per_source is not None:
+            argv += ["--limit", str(limit_per_source)]
         if args.email:                 argv += ["--email", args.email]
         if args.format:                argv += ["--format", args.format]
         argv += ["--output", str(out_prefix)]
@@ -187,14 +192,17 @@ class ArxivSpec(SourceSpec):
     def build(self, args, out_dir):
         out_prefix = out_dir / "phase_1" / "arxiv"
         argv = [sys.executable, str(self.script), args.query]
-        # Prefer explicit --max-results; otherwise map runner --limit to arxiv --max-results
+        # Prefer explicit --max-results; otherwise map per-source limit (if any) to arxiv --max-results
+        limit_per_source = getattr(args, "limit_per_source", None)
         if args.max_results is not None:
             argv += ["--max-results", str(args.max_results)]
-        elif args.limit is not None:
-            argv += ["--max-results", str(args.limit)]
+        elif limit_per_source is not None:
+            argv += ["--max-results", str(limit_per_source)]
         if args.sort_by:                 argv += ["--sort-by", args.sort_by]
         if args.sort_order:              argv += ["--sort-order", args.sort_order]
         if args.start is not None:       argv += ["--start", str(args.start)]
+        if args.year_from is not None: argv += ["--year-from", str(args.year_from)]
+        if args.year_to is not None: argv += ["--year-to", str(args.year_to)]
         # arxiv.py uses --output and writes CSV/JSON/JSONL if present in code
         argv += ["--output", str(out_prefix)]
         return argv, str(out_prefix)
@@ -205,7 +213,9 @@ class ScienceDirectSpec(SourceSpec):
         argv = [sys.executable, str(self.script), args.query]
         if args.year_from is not None: argv += ["--year-from", str(args.year_from)]
         if args.year_to   is not None: argv += ["--year-to",   str(args.year_to)]
-        if args.limit     is not None: argv += ["--limit",     str(args.limit)]
+        limit_per_source = getattr(args, "limit_per_source", None)
+        if limit_per_source is not None:
+            argv += ["--limit", str(limit_per_source)]
         if args.format:                argv += ["--format", args.format]
         if args.api_key:               argv += ["--api-key", args.api_key]
         # Reuse runner-level no_enhance to disable abstract enrichment in scienceDirect.py
@@ -222,8 +232,9 @@ class ScopusSpec(SourceSpec):
             argv += ["--year-from", str(args.year_from)]
         if args.year_to is not None:
             argv += ["--year-to", str(args.year_to)]
-        if args.limit is not None:
-            argv += ["--limit", str(args.limit)]
+        limit_per_source = getattr(args, "limit_per_source", None)
+        if limit_per_source is not None:
+            argv += ["--limit", str(limit_per_source)]
         if getattr(args, "no_enhance", False):
             argv += ["--no-enhance"]
         return argv, str(out_prefix)
@@ -246,7 +257,9 @@ class WileySpec(SourceSpec):
         argv = [sys.executable, str(self.script), args.query]
         if args.year_from is not None: argv += ["--year-from", str(args.year_from)]
         if args.year_to   is not None: argv += ["--year-to",   str(args.year_to)]
-        if args.limit     is not None: argv += ["--limit",     str(args.limit)]
+        limit_per_source = getattr(args, "limit_per_source", None)
+        if limit_per_source is not None:
+            argv += ["--limit", str(limit_per_source)]
         if args.no_abstracts:          argv += ["--no-abstracts"]
         if args.verbose:               argv += ["--verbose"]
         argv += ["--output", str(out_prefix)]
@@ -308,7 +321,6 @@ def discover_latest_csvs(base_dir: Path, allowed_sources: Optional[List[str]] = 
             found[key] = p
     return found
 
-# ---- Helper: De-duplication and CSV loading ----
 from collections import OrderedDict
 
 
@@ -431,7 +443,6 @@ def load_and_dedup_csvs(csv_map: Dict[str, Path], priority_rank: Optional[Dict[s
                     uniq[key] = rec
     return list(uniq.values())
 
-# ---- SQLite helpers ----
 import sqlite3
 
 def _ensure_sqlite_table(conn: sqlite3.Connection, table: str):
@@ -584,8 +595,8 @@ def normalize_and_merge(
 
 def main():
     p = argparse.ArgumentParser(description="Unified runner for your academic crawlers")
-    p.add_argument("--sources", help="Comma-separated sources or 'all'")
-    p.add_argument("--source", help="Alias of --sources (singular); can be combined with --sources")
+    p.add_argument("--sources", help="Comma-separated sources or 'all'. If omitted (and --source is not set), defaults to 'all' sources.")
+    p.add_argument("--source", help="Alias of --sources (singular); can be combined with --sources. If both are omitted, all sources are used.")
     p.add_argument("--query", help="Search query (ignored if --doi is set and a source supports DOI)")
     p.add_argument("--doi", help="DOI for sources that support fetching by DOI (e.g., openalex, crossref)")
     p.add_argument("--year-from", type=int, dest="year_from")
@@ -594,9 +605,18 @@ def main():
         "--limit",
         type=int,
         help=(
-            "Optional. If omitted, the runner will not pass a per-source limit (each source will fetch all available results per its own pagination). "
-            "With --merge, when provided, this is treated as the target UNIQUE rows after de-dup; the runner will refetch with higher per-source limits until reached or attempts are exhausted. "
-            "For arXiv, this is forwarded as --max-results."
+            "Optional global cap on the merged, deduplicated output when used with --merge. "
+            "By default, sources will use their own pagination and fetch as many results as they expose, and the merged output will be truncated to --limit rows if provided. "
+            "When combined with --per-provider, this value is also used as a per-provider fetch cap (and may be increased internally during iterative re-runs). "
+            "For ArXiv, an active per-provider cap is forwarded as --max-results."
+        ),
+    )
+    p.add_argument(
+        "--per-provider",
+        action="store_true",
+        help=(
+            "Treat --limit as a per-provider fetch cap during crawling. "
+            "By default, --limit only caps the merged, deduplicated output when --merge is used."
         ),
     )
     p.add_argument("--fresh", action="store_true", help="Before running, delete any existing per-source outputs in --out-dir for the chosen sources to avoid merging stale files.")
@@ -652,13 +672,16 @@ def main():
     if not args.query and not args.doi:
         p.error("You must provide --query (or --doi for DOI-capable sources).")
 
-    # Allow using --source as an alias to --sources
-    if not args.sources and not args.source:
-        p.error("You must provide --sources or --source (e.g., --sources acm,arxiv or --source acm,arxiv).")
+    # Allow using --source as an alias to --sources; default to 'all' when neither is given
     if args.sources and args.source:
+        # Both provided: merge them
         args.sources = f"{args.sources},{args.source}"
-    elif not args.sources:
+    elif not args.sources and args.source:
+        # Only --source provided
         args.sources = args.source
+    elif not args.sources and not args.source:
+        # Neither provided: default to all sources
+        args.sources = "all"
 
     if args.limit is None:
         print("[INFO] No --limit provided: each source will attempt to fetch all available results (may take a long time).")
@@ -710,6 +733,12 @@ def main():
     priority_list = [s.strip().lower() for s in (args.source_priority.split(',') if args.source_priority else chosen)]
     priority_rank = {name: idx for idx, name in enumerate(priority_list)}
 
+    # Internal per-source fetch limit: only used when --per-provider is enabled.
+    limit_per_source = None
+    if args.limit is not None and getattr(args, "per_provider", False):
+        limit_per_source = args.limit
+    setattr(args, "limit_per_source", limit_per_source)
+
     # Optionally remove stale outputs for chosen sources
     if args.fresh:
         for key in chosen:
@@ -758,14 +787,55 @@ def main():
             print("[WARN] No per-source CSVs found in phase_1 to build phase_2. Skipping.", file=sys.stderr)
         else:
             if args.limit:
-                # Attempt iterative re-crawl to reach target unique count under dedup + DOI filter
-                attempt = 0
-                max_attempts = 3
-                growth = 1.5
-                target_unique = args.limit
-                while True:
+                if getattr(args, "per_provider", False):
+                    # Per-provider mode: keep iterative re-crawl behavior, but bump per-source fetch limit only.
+                    attempt = 0
+                    max_attempts = 3
+                    growth = 1.5
+                    target_unique = args.limit
+                    while True:
+                        unique_count = normalize_and_merge(
+                            csv_map_p2, merged_phase2, target_limit=None,
+                            sql_db_path=(phase2_dir / "merged_all_sources.sqlite" if args.save_sql else None),
+                            sql_table=args.sql_table,
+                            priority_rank={name: idx for idx, name in enumerate(chosen)},
+                            dedup=True,
+                            drop_empty_doi=True,
+                        )
+                        print(f"[OK] Phase 2 merged (dedup + drop empty DOI) rows: {unique_count}. Written to: {merged_phase2}")
+                        if unique_count >= target_unique or attempt >= max_attempts:
+                            if unique_count > target_unique:
+                                _ = normalize_and_merge(
+                                    csv_map_p2, merged_phase2, target_limit=target_unique,
+                                    sql_db_path=(phase2_dir / "merged_all_sources.sqlite" if args.save_sql else None),
+                                    sql_table=args.sql_table,
+                                    priority_rank={name: idx for idx, name in enumerate(chosen)},
+                                    dedup=True,
+                                    drop_empty_doi=True,
+                                )
+                                print(f"[OK] Phase 2 trimmed to target {target_unique} rows.")
+                            break
+                        attempt += 1
+                        prev_limit = getattr(args, "limit_per_source", None) or 100
+                        new_limit = int(prev_limit * growth)
+                        if new_limit == prev_limit:
+                            new_limit += 50
+                        args.limit_per_source = new_limit
+                        print(f"[INFO] Phase 2 unique < target ({unique_count} < {target_unique}). Increasing per-provider fetch limit to {args.limit_per_source} and re-running sources...")
+                        # Re-run the selected sources with higher per-provider limit
+                        for key in chosen:
+                            spec = SOURCES[key]
+                            if not spec.script.exists():
+                                continue
+                            argv, _ = spec.build(args, out_dir)
+                            _ = run_cmd(argv)
+                        # Refresh csv_map after re-run (from phase_1)
+                        csv_map_p2 = discover_latest_csvs(phase1_dir, allowed_sources=chosen)
+                else:
+                    # Global mode: single merge and cap merged output to --limit rows.
                     unique_count = normalize_and_merge(
-                        csv_map_p2, merged_phase2, target_limit=None,
+                        csv_map_p2, merged_phase2,
+                        target_limit=args.limit,
                         sql_db_path=(phase2_dir / "merged_all_sources.sqlite" if args.save_sql else None),
                         sql_table=args.sql_table,
                         priority_rank={name: idx for idx, name in enumerate(chosen)},
@@ -773,34 +843,6 @@ def main():
                         drop_empty_doi=True,
                     )
                     print(f"[OK] Phase 2 merged (dedup + drop empty DOI) rows: {unique_count}. Written to: {merged_phase2}")
-                    if unique_count >= target_unique or attempt >= max_attempts:
-                        if unique_count > target_unique:
-                            _ = normalize_and_merge(
-                                csv_map_p2, merged_phase2, target_limit=target_unique,
-                                sql_db_path=(phase2_dir / "merged_all_sources.sqlite" if args.save_sql else None),
-                                sql_table=args.sql_table,
-                                priority_rank={name: idx for idx, name in enumerate(chosen)},
-                                dedup=True,
-                                drop_empty_doi=True,
-                            )
-                            print(f"[OK] Phase 2 trimmed to target {target_unique} rows.")
-                        break
-                    attempt += 1
-                    prev_limit = args.limit or 100
-                    new_limit = int(prev_limit * growth)
-                    if new_limit == prev_limit:
-                        new_limit += 50
-                    args.limit = new_limit
-                    print(f"[INFO] Phase 2 unique < target ({unique_count} < {target_unique}). Increasing per-source limit to {args.limit} and re-running sources...")
-                    # Re-run the selected sources with higher limit
-                    for key in chosen:
-                        spec = SOURCES[key]
-                        if not spec.script.exists():
-                            continue
-                        argv, _ = spec.build(args, out_dir)
-                        _ = run_cmd(argv)
-                    # Refresh csv_map after re-run (from phase_1)
-                    csv_map_p2 = discover_latest_csvs(phase1_dir, allowed_sources=chosen)
             else:
                 unique_count = normalize_and_merge(
                     csv_map_p2, merged_phase2,
