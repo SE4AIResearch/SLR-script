@@ -24,33 +24,40 @@ Because of these differences, the **same search string may return different leve
 
 ### Command-line Options
 - `query` (positional): Your search string, e.g., `"machine learning"`  
-- `--year-from`: Lower bound year (inclusive) to filter results  
-- `--year-to`: Upper bound year (inclusive) to filter results  
-- `--limit`: Maximum number of results to return after deduplication (default: 100) (optional, if not provided, will crawl all the results)  
-- `--per-provider`: Maximum number of results to fetch per provider (default: 100)  
-- `--out-csv`: Path to output CSV file (default: `results.csv`)  
-- `--out-sqlite`: Path to output SQLite database file (optional)  
-- `--sources`: Comma-separated list of sources to query (e.g., `acm, scienceDirect, scopus, openalex, crossref, arxiv, springer, wiley`) (optional, if not provided, will crawl all the sources)
-- `--springer-api-key`: API key for Springer (if available)  
-<!-- - `--ieee-api-key`: API key for IEEE Xplore (if available)   -->
-- `--enrich-abstracts`: Include abstracts in the output when available (Default: True) 
-- `--merge`: Merge results from multiple queries or files  
-- `--no-enhance`: Disable enhanced abstracts where available
+- `--year-from`: Lower bound year (inclusive)  
+- `--year-to`: Upper bound year (inclusive)  
+- `--limit`: Global cap **after merging and deduplication**.  
+  - Defaults to 100.  
+  - Does **not** limit per-provider crawling unless `--per-provider` is used.  
+- `--per-provider`: Treat `--limit` as a per-provider fetch cap.  
+  - When enabled, each provider fetches up to `--limit` items, and Phase 2 may increase this cap automatically to reach the target merged size.  
+- `--out-dir`: Root directory where all results are saved.  
+  - Raw per-provider results go to `<out-dir>/phase_1/`  
+  - Merged results go to `<out-dir>/phase_2/`  
+  - Default: `results/`  
+- `--sources`: Comma‑separated list of providers (e.g., `crossref,scopus,openalex`)  
+  - If omitted, all providers are used.  
+- `--springer-api-key`: API key for Springer (optional)  
+- `--enrich-abstracts`: Expand abstracts when available (default: True)  
+- `--no-enhance`: Disable abstract enhancement  
+- `--merge`: Merge results from multiple queries or provider outputs
+
+*Deprecated options such as `--out-csv` and `--out-sqlite` have been removed from the tool and are no longer used.*
 
 
 ### Examples
 
-- Search for papers on "machine learning" published between 2018 and 2022, limiting to 50 results:
+- Search for papers on "machine learning" published between 2018 and 2022, keeping the final merged output to 50 rows:
   ```bash
   python run_all.py --query "machine learning" --year-from 2018 --year-to 2022 --limit 50
   ```
 
-- Search across OpenAlex, Crossref, and arXiv for "deep learning" with up to 200 results per provider:
+- Search across OpenAlex, Crossref, and arXiv with a per-provider cap of 200 results:
   ```bash
-  python run_all.py --query "deep learning" --sources openalex,crossref,arxiv --per-provider 200
+  python run_all.py --query "deep learning" --sources openalex,crossref,arxiv --limit 200 --per-provider
   ```
 
-- Merge results from multiple CSV files into one consolidated CSV:
+- Merge multiple existing CSV files into one deduplicated output (written to `<out-dir>/phase_2/`):
   ```bash
-  python run_all.py --merge file1.csv file2.csv --out-csv merged_results.csv
+  python run_all.py --merge file1.csv file2.csv --out-dir merged_results
   ```
