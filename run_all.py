@@ -167,7 +167,7 @@ class OpenAlexSpec(SourceSpec):
         if args.no_enhance:            argv += ["--no-enhance"]
         if args.verbose:               argv += ["--verbose"]
         if args.debug:                 argv += ["--debug"]
-        argv += ["--out-jsonl",str(out_prefix) + ".jsonl"]
+        argv += ["--out-csv", str(out_prefix) + ".csv"]
         return argv, str(out_prefix)
 
 class ACMSpec(SourceSpec):
@@ -249,6 +249,7 @@ class SpringerSpec(SourceSpec):
         if args.date_from:             argv += ["--date-from", args.date_from]
         if args.date_to:               argv += ["--date-to", args.date_to]
         # springer writes its own timestamped CSV into ./springer_results; we just run it.
+        argv += ["--output", str(out_prefix)]
         return argv, str(out_prefix)
 
 class WileySpec(SourceSpec):
@@ -771,7 +772,7 @@ def main():
         else:
             total_rows = normalize_and_merge(
                 csv_map_p1, merged_phase1,
-                target_limit=(args.limit if args.limit else None),
+                target_limit=None,
                 sql_db_path=(phase1_dir / "merged_all_sources.sqlite" if args.save_sql else None),
                 sql_table=args.sql_table,
                 priority_rank=None,

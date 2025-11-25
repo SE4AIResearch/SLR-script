@@ -245,9 +245,9 @@ def _build_year_clause(y_from: int | None, y_to: int | None) -> str | None:
         return None
 
     # If both bounds are present and small span, enumerate years
-    if y_from and y_to and y_from <= y_to and (y_to - y_from + 1) <= 20:
-        yrs = [f"LIMIT-TO(PUBYEAR,{y})" for y in range(y_from, y_to + 1)]
-        return "(" + " OR ".join(yrs) + ")"
+    # if y_from and y_to and y_from <= y_to and (y_to - y_from + 1) <= 20:
+    #     yrs = [f"LIMIT-TO(PUBYEAR,{y})" for y in range(y_from, y_to + 1)]
+    #     return "(" + " OR ".join(yrs) + ")"
 
     # Otherwise, use AFT/BEF with inclusive adjustment
     parts = []
@@ -363,15 +363,15 @@ def get_metadata(base_url, params, headers, total_limit=None):
         params['count'] = next_count
 
     pbar.close()
+
+    if total_limit is not None and len(all_data) > total_limit:
+        all_data = all_data[:total_limit]
+
     return all_data
 
 
 def parse_metadata(entries):
     skipped_no_doi = skipped_no_year_with_bounds = skipped_year_out = 0
-
-    skipped_year_out += 1
-
-    skipped_no_year_with_bounds += 1
 
 
     papers_metadata = []
@@ -444,6 +444,7 @@ def parse_metadata(entries):
 
         yf = getattr(args, 'year_from', None)
         yt = getattr(args, 'year_to', None)
+
         if year_int is not None:
             if yf is not None and year_int < yf:
                 skipped_year_out += 1
@@ -471,7 +472,6 @@ def parse_metadata(entries):
         }
         papers_metadata.append(metadata)
 
-        # 末尾打印
     print(f"[DEBUG] Post-filter stats:"
           f"no_year_with_bounds={skipped_no_year_with_bounds}, "
           f"year_out_of_range={skipped_year_out}")
@@ -521,7 +521,12 @@ if args.year_from or args.year_to:
 
 # Statistics
 total_papers = len(papers_metadata)
-papers_with_abstract = df[df['abstract'] != 'N/A'].shape[0]
+
+if total_papers > 0 and 'abstract' in df.columns:
+    papers_with_abstract = df[df['abstract'].notna() & (df['abstract'] != 'N/A')].shape[0]
+else:
+    papers_with_abstract = 0
+
 abstract_rate = (papers_with_abstract / total_papers * 100) if total_papers > 0 else 0
 
 print(f"\n{'=' * 60}")

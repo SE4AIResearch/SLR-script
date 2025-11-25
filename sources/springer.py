@@ -323,6 +323,11 @@ def main():
     ap.add_argument("--date-from", default="", help="YYYY or empty")
     ap.add_argument("--date-to", default="", help="YYYY or empty")
     ap.add_argument("--delay", type=float, default=0.3, help="Delay between page requests (seconds)")
+    ap.add_argument(
+        "--output",
+        default=None,
+        help="Output CSV path (without extension). If not provided, a timestamped file in the default results directory is used.",
+    )
     args = ap.parse_args()
 
     sess = requests.Session()
@@ -344,8 +349,14 @@ def main():
     detected_pages = detect_total_pages(soup, first_count)
     print(f"[DEBUG] Detected total_pages={detected_pages}")
 
-    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    out_path = OUTPUT_DIR / f'springer_{timestamp}.csv'
+    if args.output:
+        out_path = pathlib.Path(args.output)
+        # Ensure .csv suffix
+        if out_path.suffix.lower() != ".csv":
+            out_path = out_path.with_suffix(".csv")
+    else:
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        out_path = OUTPUT_DIR / f'springer_{timestamp}.csv'
 
     with open(out_path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)

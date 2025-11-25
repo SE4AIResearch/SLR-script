@@ -26,9 +26,14 @@ Because of these differences, the **same search string may return different leve
 - `query` (positional): Your search string, e.g., `"machine learning"`  
 - `--year-from`: Lower bound year (inclusive)  
 - `--year-to`: Upper bound year (inclusive)  
-- `--limit`: Global cap **after merging and deduplication**.  
-  - Defaults to 100.  
-  - Does **not** limit per-provider crawling unless `--per-provider` is used.  
+- `--limit`: Controls how many results to keep, but behaves differently depending on context:
+  - Without `--per-provider`:  
+    - Providers fetch as many results as their default behavior allows.  
+    - `--limit` applies **only after Phase 2 merging and deduplication**, trimming the final merged CSV to the first N rows.
+  - With `--per-provider`:  
+    - Each provider initially fetches up to N items.  
+    - Phase 2 will automatically increase per‑provider fetch sizes (e.g., 10 → 15 → 22…) until the merged deduplicated set reaches at least N items, or retry limits are reached.  
+    - Final output is trimmed to exactly N deduplicated rows.
 - `--per-provider`: Treat `--limit` as a per-provider fetch cap.  
   - When enabled, each provider fetches up to `--limit` items, and Phase 2 may increase this cap automatically to reach the target merged size.  
 - `--out-dir`: Root directory where all results are saved.  
