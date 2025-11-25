@@ -946,7 +946,7 @@ def main():
     # Save results
     if papers:
         save_to_csv(papers, args.out_csv)
-        save_to_jsonl(papers, args.out_jsonl)
+        # save_to_jsonl(papers, args.out_jsonl)
 
         if args.out_json:
             save_to_json(papers, args.out_json)

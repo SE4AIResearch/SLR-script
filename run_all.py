@@ -246,8 +246,13 @@ class SpringerSpec(SourceSpec):
         if args.max_pages is not None: argv += ["--max-pages", str(args.max_pages)]
         if args.discipline:            argv += ["--discipline", args.discipline]
         if args.sort:                  argv += ["--sort", args.sort]
-        if args.date_from:             argv += ["--date-from", args.date_from]
-        if args.date_to:               argv += ["--date-to", args.date_to]
+        if args.year_from is not None:
+            argv += ["--date-from", str(args.year_from)]
+        if args.year_to is not None:
+            argv += ["--date-to", str(args.year_to)]
+        limit_per_source = getattr(args, "limit_per_source", None)
+        if limit_per_source is not None:
+            argv += ["--limit", str(limit_per_source)]
         # springer writes its own timestamped CSV into ./springer_results; we just run it.
         argv += ["--output", str(out_prefix)]
         return argv, str(out_prefix)

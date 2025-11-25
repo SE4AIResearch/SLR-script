@@ -328,6 +328,12 @@ def main():
         default=None,
         help="Output CSV path (without extension). If not provided, a timestamped file in the default results directory is used.",
     )
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of records to save (global cap across all pages).",
+    )
     args = ap.parse_args()
 
     sess = requests.Session()
@@ -358,14 +364,21 @@ def main():
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         out_path = OUTPUT_DIR / f'springer_{timestamp}.csv'
 
+    # Normalize limit: non-positive means "no limit"
+    limit = args.limit if args.limit and args.limit > 0 else None
+    written = 0
+
     with open(out_path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
         w.writerow(['title', 'authors', 'published date', 'link', 'content_type', 'DOI', 'abstract', 'venue', 'keywords', 'citations'])
 
         # page 1
         for rec in first_records:
+            if limit is not None and written >= limit:
+                break
             w.writerow([rec['title'], rec['authors'], rec['published date'], rec['link'], rec['content_type'],
                         rec['DOI'], rec['abstract'], rec['venue'], rec['keywords'], rec['citations']])
+            written += 1
 
         empty_count = 0
         prev_url = url1
@@ -373,6 +386,9 @@ def main():
         # next pages: only iterate while within detected total pages and user cap
         p = 2
         while p <= min(args.max_pages, detected_pages):
+            if limit is not None and written >= limit:
+                break
+
             print(f"Page: {p}")
             url = build_search_url(q_norm, page=p, discipline=(args.discipline or None), sort=args.sort,
                                    date_from=args.date_from, date_to=args.date_to)
@@ -381,9 +397,12 @@ def main():
             soup = BeautifulSoup(html, 'html.parser')
             got = 0
             for rec in extract_records(soup):
+                if limit is not None and written >= limit:
+                    break
                 w.writerow([rec['title'], rec['authors'], rec['published date'], rec['link'], rec['content_type'],
                             rec['DOI'], rec['abstract'], rec['venue'], rec['keywords'], rec['citations']])
                 got += 1
+                written += 1
 
             # detect presence of a Next link in pagination (best-effort)
             has_next = bool(soup.find('a', attrs={'rel': 'next'}) or

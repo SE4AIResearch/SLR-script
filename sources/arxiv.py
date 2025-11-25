@@ -275,14 +275,7 @@ class ArxivCrawler:
         current_start = start
 
         while True:
-            # 计算这次请求需要多少条记录
-            if max_results is not None:
-                remaining = max_results - len(papers)
-                if remaining <= 0:
-                    break
-                current_batch_size = min(batch_size, remaining)
-            else:
-                current_batch_size = batch_size
+            current_batch_size = batch_size
 
             params = {
                 "search_query": search_query,
@@ -298,7 +291,6 @@ class ArxivCrawler:
 
                 root = ET.fromstring(response.text)
 
-                # 检查是否有结果
                 current_total_results = int(root.findtext(
                     "opensearch:totalResults",
                     default="0",
@@ -314,68 +306,52 @@ class ArxivCrawler:
                     print("No more entries found")
                     break
 
-                # 解析当前批次的论文
-                batch_papers = []
                 for entry in entries:
                     paper = self._parse_entry(entry)
-                    batch_papers.append(paper)
 
-                papers.extend(batch_papers)
+                    if year_from is not None or year_to is not None:
+                        year = None
+                        if paper.published_date:
+                            # Expect formats like "2023-04-21T16:00:00Z" or "2023-04-21"
+                            m = re.match(r"(\d{4})", paper.published_date)
+                            if m:
+                                try:
+                                    year = int(m.group(1))
+                                except ValueError:
+                                    year = None
 
-                # 进度显示
-                if len(papers) % 100 == 0 or len(batch_papers) < current_batch_size:
-                    if max_results is not None:
-                        print(f"  Retrieved {len(papers)}/{max_results} papers...")
-                    else:
-                        print(f"  Retrieved {len(papers)}/{target_count} papers...")
+                        if year is None:
+                            continue
+                        if year_from is not None and year < year_from:
+                            continue
+                        if year_to is not None and year > year_to:
+                            continue
 
-                # 如果这批次的结果少于请求的数量，说明已经到底了
-                if len(batch_papers) < current_batch_size:
-                    print("Reached end of results")
-                    break
+                    papers.append(paper)
 
-                # 如果已达到目标数量，退出
+                    if max_results is not None and len(papers) >= max_results:
+                        break
+
+                if max_results is not None:
+                    print(f"  Retrieved {len(papers)}/{max_results} papers...")
+                else:
+                    print(f"  Retrieved {len(papers)}/{target_count} papers...")
+
                 if max_results is not None and len(papers) >= max_results:
                     break
 
-                # 更新起始位置
-                current_start += len(batch_papers)
+                if len(entries) < current_batch_size:
+                    print("Reached end of results")
+                    break
 
-                # API延迟
+                current_start += len(entries)
+
                 time.sleep(self.delay)
 
             except Exception as e:
                 print(f"Error fetching results: {e}")
                 break
 
-        # Apply publication year filter if provided
-        if year_from is not None or year_to is not None:
-            filtered = []
-            for p in papers:
-                year = None
-                if p.published_date:
-                    # Expect formats like "2023-04-21T16:00:00Z" or "2023-04-21"
-                    m = re.match(r"(\d{4})", p.published_date)
-                    if m:
-                        try:
-                            year = int(m.group(1))
-                        except ValueError:
-                            year = None
-
-                # If we cannot parse a year and a range is requested, skip the paper
-                if year is None:
-                    continue
-
-                if year_from is not None and year < year_from:
-                    continue
-                if year_to is not None and year > year_to:
-                    continue
-
-                filtered.append(p)
-
-            papers = filtered
-
-        # 如果设置了限制，确保不超过限制
         if max_results is not None:
             papers = papers[:max_results]
 
