@@ -810,16 +810,6 @@ def main():
                         )
                         print(f"[OK] Phase 2 merged (dedup + drop empty DOI) rows: {unique_count}. Written to: {merged_phase2}")
                         if unique_count >= target_unique or attempt >= max_attempts:
-                            if unique_count > target_unique:
-                                _ = normalize_and_merge(
-                                    csv_map_p2, merged_phase2, target_limit=target_unique,
-                                    sql_db_path=(phase2_dir / "merged_all_sources.sqlite" if args.save_sql else None),
-                                    sql_table=args.sql_table,
-                                    priority_rank={name: idx for idx, name in enumerate(chosen)},
-                                    dedup=True,
-                                    drop_empty_doi=True,
-                                )
-                                print(f"[OK] Phase 2 trimmed to target {target_unique} rows.")
                             break
                         attempt += 1
                         prev_limit = getattr(args, "limit_per_source", None) or 100
@@ -838,17 +828,17 @@ def main():
                         # Refresh csv_map after re-run (from phase_1)
                         csv_map_p2 = discover_latest_csvs(phase1_dir, allowed_sources=chosen)
                 else:
-                    # Global mode: single merge and cap merged output to --limit rows.
                     unique_count = normalize_and_merge(
                         csv_map_p2, merged_phase2,
-                        target_limit=args.limit,
+                        target_limit=None,
                         sql_db_path=(phase2_dir / "merged_all_sources.sqlite" if args.save_sql else None),
                         sql_table=args.sql_table,
                         priority_rank={name: idx for idx, name in enumerate(chosen)},
                         dedup=True,
                         drop_empty_doi=True,
                     )
-                    print(f"[OK] Phase 2 merged (dedup + drop empty DOI) rows: {unique_count}. Written to: {merged_phase2}")
+                    print(
+                        f"[OK] Phase 2 merged (dedup + drop empty DOI) rows: {unique_count}. Written to: {merged_phase2}")
             else:
                 unique_count = normalize_and_merge(
                     csv_map_p2, merged_phase2,
