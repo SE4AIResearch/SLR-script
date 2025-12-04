@@ -62,7 +62,12 @@ Because of these differences, the **same search string may return different leve
   python run_all.py --query "deep learning" --sources openalex,crossref,arxiv --limit 200 --per-provider
   ```
 
-- Merge multiple existing CSV files into one deduplicated output (written to `<out-dir>/phase_2/`):
+- Run the crawlers for a query and merge all per-source CSVs in `<out-dir>/phase_1/` into a deduplicated output in `<out-dir>/phase_2/`:
   ```bash
-  python run_all.py --merge file1.csv file2.csv --out-dir merged_results
+  python run_all.py --query "deep learning" \
+    --sources openalex,crossref,arxiv \
+    --year-from 2018 --year-to 2022 \
+    --limit 200 \
+    --merge \
+    --out-dir results
   ```
