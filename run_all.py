@@ -557,6 +557,7 @@ def normalize_and_merge(
         year = rec.get("year") or rec.get("Year") or rec.get("published year") or rec.get("Published Year") or ""
         # If year is still empty, try deriving it from published_date/publication_date/date-like fields
         if not year:
+            # First, try common date-like fields by explicit name
             pub_date = (
                 rec.get("published_date")
                 or rec.get("Published Date")
@@ -569,13 +570,19 @@ def normalize_and_merge(
                 or rec.get("coverDate")
                 or ""
             )
+            # If still empty, fall back to any column whose name contains 'date'
+            if not pub_date:
+                for k, v in rec.items():
+                    if "date" in k.lower() and isinstance(v, str) and v.strip():
+                        pub_date = v
+                        break
             if isinstance(pub_date, str):
                 pub_date = pub_date.strip()
                 # Case 1: formats like YYYY-MM-DD or YYYY/MM/DD
                 if len(pub_date) >= 4 and pub_date[:4].isdigit():
                     year = pub_date[:4]
                 else:
-                    # Case 2: Springer-style dates like 8-Dec-22 or 29-Nov-22z -> use the last 2 digits as year
+                    # Case 2: Springer-style dates like 8-Dec-22 or 29-Nov-22z or Excel-parsed 12/8/2022
                     m = _re.search(r'(\d{2})\D*$', pub_date)
                     if m:
                         yy = int(m.group(1))
@@ -604,6 +611,11 @@ def normalize_and_merge(
             or rec.get("coverDate")
             or ""
         )
+        if not published_date:
+            for k, v in rec.items():
+                if "date" in k.lower() and isinstance(v, str) and v.strip():
+                    published_date = v
+                    break
         content_type = rec.get("content_type") or rec.get("Content Type") or rec.get("type") or ""
 
         row = {
