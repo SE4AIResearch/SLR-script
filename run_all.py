@@ -555,6 +555,33 @@ def normalize_and_merge(
         title = rec.get("title") or rec.get("Title") or rec.get("paper_title") or rec.get("Paper Title") or ""
         authors = rec.get("authors") or rec.get("Authors") or rec.get("author") or ""
         year = rec.get("year") or rec.get("Year") or rec.get("published year") or rec.get("Published Year") or ""
+        # If year is still empty, try deriving it from published_date/publication_date/date-like fields
+        if not year:
+            pub_date = (
+                rec.get("published_date")
+                or rec.get("Published Date")
+                or rec.get("published date")
+                or rec.get("publication_date")
+                or rec.get("Publication Date")
+                or rec.get("publication date")
+                or rec.get("date")
+                or rec.get("Date")
+                or rec.get("coverDate")
+                or ""
+            )
+            if isinstance(pub_date, str):
+                pub_date = pub_date.strip()
+                # Case 1: formats like YYYY-MM-DD or YYYY/MM/DD
+                if len(pub_date) >= 4 and pub_date[:4].isdigit():
+                    year = pub_date[:4]
+                else:
+                    # Case 2: Springer-style dates like 8-Dec-22 or 29-Nov-22z -> use the last 2 digits as year
+                    m = _re.search(r'(\d{2})\D*$', pub_date)
+                    if m:
+                        yy = int(m.group(1))
+                        # Assume modern papers: map 00-30 -> 2000-2030, else 1900s as fallback
+                        full_year = 2000 + yy if yy <= 30 else 1900 + yy
+                        year = str(full_year)
         doi_raw = rec.get("doi") or rec.get("DOI") or rec.get("Doi") or ""
         doi = _norm_doi(doi_raw)
         if not _is_valid_doi(doi):
@@ -565,7 +592,18 @@ def normalize_and_merge(
         publisher = rec.get("publisher") or rec.get("Publisher") or ""
         keywords = rec.get("keywords") or rec.get("Keywords") or ""
         citations = rec.get("citations") or rec.get("Citations") or ""
-        published_date = rec.get("published_date") or rec.get("Published Date") or rec.get("published date") or ""
+        published_date = (
+            rec.get("published_date")
+            or rec.get("Published Date")
+            or rec.get("published date")
+            or rec.get("publication_date")
+            or rec.get("Publication Date")
+            or rec.get("publication date")
+            or rec.get("date")
+            or rec.get("Date")
+            or rec.get("coverDate")
+            or ""
+        )
         content_type = rec.get("content_type") or rec.get("Content Type") or rec.get("type") or ""
 
         row = {
