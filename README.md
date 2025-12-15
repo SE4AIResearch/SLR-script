@@ -1,6 +1,6 @@
 # SLR-script
 ---
-Demo can be found here: [link](https://stevens0-my.sharepoint.com/:v:/g/personal/ealomar_stevens_edu/EQ30Ze3UXsRJq1afk5E_31gB76p_TF6SSr0zuXcbiRUodw?nav=eyJyZWZlcnJhbEluZm8iOnsicmVmZXJyYWxBcHAiOiJPbmVEcml2ZUZvckJ1c2luZXNzIiwicmVmZXJyYWxBcHBQbGF0Zm9ybSI6IldlYiIsInJlZmVycmFsTW9kZSI6InZpZXciLCJyZWZlcnJhbFZpZXciOiJNeUZpbGVzTGlua0NvcHkifX0&e=Ec7uBL)
+Demo can be found here: [link](https://stevens0-my.sharepoint.com/:v:/g/personal/ealomar_stevens_edu/IQAN9GXt1F7ESatWn5ORP99YAYWzRqMKV99MIzSNpKbauyE?nav=eyJyZWZlcnJhbEluZm8iOnsicmVmZXJyYWxBcHAiOiJPbmVEcml2ZUZvckJ1c2luZXNzIiwicmVmZXJyYWxBcHBQbGF0Zm9ybSI6IldlYiIsInJlZmVycmFsTW9kZSI6InZpZXciLCJyZWZlcnJhbFZpZXciOiJNeUZpbGVzTGlua0NvcHkifX0&e=UArsN6)
 
 ## Requirements
 - Python 3.7 or higher  
@@ -68,6 +68,7 @@ Because of these differences, the **same search string may return different leve
     --sources openalex,crossref,arxiv \
     --year-from 2018 --year-to 2022 \
     --limit 200 \
+    --per-provider
     --merge \
     --out-dir results
   ```
